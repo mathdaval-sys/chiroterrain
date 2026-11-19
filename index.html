@@ -10,7 +10,7 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="lib/leaflet.css">
 <style>
-:root{--bg:#163026;--fg:#f0f0eb;--st:#1e6fd9;--ar:#2e9d4a;--ob:#e8851a;--bad:#d93025;--warn:#e8a11a;--ok:#2e9d4a;--card:#fff;--txt:#1d1d1b;--mut:#6b6b66;--line:#e2e2dc}
+:root{--pg:#8e3fd6;--bg:#163026;--fg:#f0f0eb;--st:#1e6fd9;--ar:#2e9d4a;--ob:#e8851a;--bad:#d93025;--warn:#e8a11a;--ok:#2e9d4a;--card:#fff;--txt:#1d1d1b;--mut:#6b6b66;--line:#e2e2dc}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;height:100%;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--txt);background:var(--bg);overscroll-behavior:none}
 body{display:flex;flex-direction:column}
@@ -24,11 +24,11 @@ body{display:flex;flex-direction:column}
 #gpsChip.ok{background:var(--ok)}#gpsChip.warn{background:var(--warn);color:#222}#gpsChip.bad{background:var(--bad)}
 #map{flex:1;background:#2a2a2a}
 #bottom{display:flex;gap:6px;padding:6px;padding-bottom:max(6px,env(safe-area-inset-bottom));background:var(--bg);z-index:1000}
-#bottom button{flex:1;border:0;border-radius:12px;color:#fff;font-size:15px;font-weight:700;padding:14px 4px;line-height:1.15}
+#bottom button{flex:1;min-width:0;border:0;border-radius:12px;color:#fff;font-size:14px;font-weight:700;padding:13px 2px;line-height:1.15}
 #bottom button span{display:block;font-size:11px;font-weight:500;opacity:.9}
-.b-st{background:var(--st)}.b-ar{background:var(--ar)}.b-ob{background:var(--ob)}
+.b-st{background:var(--st)}.b-pg{background:var(--pg)}.b-ar{background:var(--ar)}.b-ob{background:var(--ob)}
 #fab{position:absolute;right:10px;bottom:90px;z-index:900;display:flex;flex-direction:column;gap:8px}
-#fab button{width:48px;height:48px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:12px;font-weight:700;color:#163026}
+#fab button{width:50px;height:50px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:11px;font-weight:700;color:#163026}
 #fab button.on{background:var(--st);color:#fff}
 /* Marqueurs */
 .mkw{background:none;border:0}
@@ -38,9 +38,12 @@ body{display:flex;flex-direction:column}
 .mk-arbre{background:var(--ar);border-radius:50%;min-width:26px;text-align:center}
 .mk-obs{background:var(--ob);border-radius:50% 50% 50% 0}
 .gpsdot{width:18px;height:18px;border-radius:50%;background:#2b7cff;border:3px solid #fff;box-shadow:0 0 0 2px rgba(43,124,255,.4);transform:translate(-50%,-50%);position:absolute}
-.site-label{background:rgba(0,0,0,.6);color:#ffd400;border:0;box-shadow:none;font-weight:700;font-size:12px;padding:2px 6px}
-.site-label:before{display:none}
+.site-label{position:absolute;transform:translate(-50%,-50%);background:rgba(0,0,0,.6);color:#ffd400;font-weight:700;font-size:12px;padding:2px 6px;border-radius:3px;white-space:nowrap;pointer-events:none}
 .hide-labels .site-label{display:none}
+.poly-label{background:rgba(142,63,214,.85);color:#fff;border:0;box-shadow:none;font-size:11px;padding:1px 5px;white-space:nowrap}
+.poly-label:before{display:none}
+.hide-plabels .poly-label{display:none}
+.mk small{font-size:9px;margin-left:3px;opacity:.9}
 /* Viseur */
 #cross{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;z-index:950;pointer-events:none;display:none}
 #cross:before,#cross:after{content:"";position:absolute;background:#ff2d2d;box-shadow:0 0 0 1px #fff}
@@ -80,7 +83,7 @@ textarea{min-height:70px}
 .thumbs img{width:76px;height:76px;object-fit:cover;border-radius:6px;display:block}
 .thumbs .x{position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:50%;border:0;background:var(--bad);color:#fff;font-weight:700}
 .badge{display:inline-block;font-size:11px;font-weight:700;color:#fff;border-radius:4px;padding:2px 5px;margin-right:3px}
-.bg-st{background:var(--st)}.bg-ar{background:var(--ar)}.bg-ob{background:var(--ob)}.bg-mu{background:#888}
+.bg-st{background:var(--st)}.bg-pg{background:var(--pg)}.btn.pg{background:var(--pg);color:#fff}.bg-ar{background:var(--ar)}.bg-ob{background:var(--ob)}.bg-mu{background:#888}
 .prog{height:10px;background:#e5e5e0;border-radius:5px;overflow:hidden;margin:10px 0}
 .prog div{height:100%;background:var(--ar);width:0}
 .mut{color:var(--mut);font-size:13px}
@@ -103,13 +106,15 @@ textarea{min-height:70px}
 <div id="fab">
   <button id="btnFollow" title="Suivre ma position">GPS</button>
   <button id="btnFit" title="Voir le site actif">SITE</button>
+  <button id="btnMeteo" title="Météo du jour">MÉTÉO</button>
 </div>
 <div id="cross"></div>
 <div id="crossBar"></div>
 <div id="bottom">
   <button class="b-st" data-add="station">+ Station<span>enregistreur</span></button>
-  <button class="b-ar" data-add="arbre">+ Arbre<span>gîte potentiel</span></button>
-  <button class="b-ob" data-add="obs">+ Observation<span>bâti, grotte, pont…</span></button>
+  <button class="b-ar" data-add="arbre">+ Arbre<span>gîte</span></button>
+  <button class="b-ob" data-add="obs">+ Obs.<span>bâti, pont…</span></button>
+  <button class="b-pg" data-add="poly">+ Polygone<span>habitat</span></button>
 </div>
 <div id="backdrop"></div>
 <div id="sheet"></div>

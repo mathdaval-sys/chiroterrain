@@ -1,5 +1,5 @@
 /* ChiroTerrain — service worker : appli disponible hors ligne + cache des fonds IGN */
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const APP_CACHE = 'ct-app-' + VERSION;
 const TILE_CACHE = 'ct-tuiles';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './lib/leaflet.js', './lib/leaflet.css', './lib/proj4.js', './lib/jszip.min.js',
