@@ -1,7 +1,7 @@
 /* ChiroTerrain — appli web de terrain (stations, arbres gîtes, observations, habitats, météo) */
 'use strict';
 const APP = 'ChiroTerrain';
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 
 /* ---------- Projections ---------- */
 proj4.defs('EPSG:2154', '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
@@ -73,10 +73,13 @@ const PASSAGE = [
 const MEMO = { station: [], passage: ['detecteur', 'nb_nuits'], arbre: [], obs: [] };
 
 /* ---------- Fonds de carte IGN (Géoplateforme, sans clé) ---------- */
-const wmts = (layer, fmt, style = 'normal') => `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=${style}&TILEMATRIXSET=PM&FORMAT=${fmt}&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`;
+const wmts = (layer, fmt, style = 'normal', base = 'https://data.geopf.fr/wmts?', tms = 'PM') => `${base}SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=${style}&TILEMATRIXSET=${tms}&FORMAT=${fmt}&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}`;
+const CLE_SCAN_GENERIQUE = 'ign_scan_ws'; // clé générique IGN ; remplaçable dans Réglages par la clé Mica
+const scanUrl = () => wmts('GEOGRAPHICALGRIDSYSTEMS.MAPS.SCAN25TOUR', 'image/jpeg', 'normal', `https://data.geopf.fr/private/wmts?apikey=${encodeURIComponent(settings.cleScan || CLE_SCAN_GENERIQUE)}&`, 'PM_6_16');
 const FONDS = {
-  ortho: { nom: 'Photo aérienne IGN', url: wmts('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg'), natif: 19 },
-  plan:  { nom: 'Plan IGN', url: wmts('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png'), natif: 18 },
+  ortho:  { nom: 'Photo aérienne IGN', url: () => wmts('ORTHOIMAGERY.ORTHOPHOTOS', 'image/jpeg'), natif: 19, zmin: 12 },
+  scan25: { nom: 'Carte IGN (SCAN 25)', url: scanUrl, natif: 16, zmin: 12 },
+  plan:   { nom: 'Plan IGN', url: () => wmts('GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2', 'image/png'), natif: 18, zmin: 12 },
 };
 const CADASTRE = wmts('CADASTRALPARCELS.PARCELLAIRE_EXPRESS', 'image/png', 'PCI%20vecteur');
 const TILE_CACHE = 'ct-tuiles';
@@ -142,7 +145,7 @@ async function tombstone(kind, id) { await dbPut('deleted', { id, kind, deletedA
 let sites = [], points = [], polys = [], meteos = [];
 let settings = {
   observateur: '', detecteurs: ['SM4BAT FS', 'SM Mini Bat', 'Batcorder', 'Audiomoth', 'Passive Recorder', 'Batlogger', 'Autre'],
-  gites: [...GITES_DEFAUT], zoomMax: 18, fond: 'ortho', activeSiteId: null, deviceId: null, lastSync: null,
+  gites: [...GITES_DEFAUT], zoomMax: 18, fond: 'ortho', cleScan: '', fondsHorsLigne: ['ortho', 'scan25', 'plan'], activeSiteId: null, deviceId: null, lastSync: null,
   last: { station: {}, passage: {}, arbre: {}, obs: {} },
 };
 let gps = null;
@@ -189,7 +192,8 @@ function fitSite(s) { if (s && hasGeom(s)) map.fitBounds([[s.bbox[1], s.bbox[0]]
 const map = L.map('map', { zoomControl: false, maxZoom: 20, attributionControl: true }).setView([46.6, 2.5], 6);
 map.attributionControl.setPrefix(false);
 const baseLayers = {};
-for (const f of Object.values(FONDS)) baseLayers[f.nom] = L.tileLayer(f.url, { maxZoom: 20, maxNativeZoom: f.natif, attribution: '© IGN' });
+for (const f of Object.values(FONDS)) baseLayers[f.nom] = L.tileLayer(f.url(), { maxZoom: 20, maxNativeZoom: f.natif, attribution: '© IGN' });
+const refreshScanLayer = () => baseLayers[FONDS.scan25.nom].setUrl(scanUrl());
 const cadastre = L.tileLayer(CADASTRE, { maxZoom: 20, maxNativeZoom: 19, minZoom: 13 });
 L.control.layers(baseLayers, { 'Cadastre': cadastre }, { position: 'topright' }).addTo(map);
 L.control.zoom({ position: 'topleft' }).addTo(map);
@@ -899,8 +903,10 @@ function tileUrls(s) {
     for (let z = z0; z <= z1; z++) for (let x = lon2x(b[0], z); x <= lon2x(b[2], z); x++) for (let y = lat2y(b[3], z); y <= lat2y(b[1], z); y++)
       out.push(tpl.replace('{z}', z).replace('{x}', x).replace('{y}', y));
   };
-  add(FONDS.ortho.url, 12, Math.min(settings.zoomMax, 19));
-  add(FONDS.plan.url, 12, 16);
+  const fl = settings.fondsHorsLigne || ['ortho', 'scan25', 'plan'];
+  if (fl.includes('ortho')) add(FONDS.ortho.url(), 12, Math.min(settings.zoomMax, 19));
+  if (fl.includes('scan25')) add(FONDS.scan25.url(), 12, 16);
+  if (fl.includes('plan')) add(FONDS.plan.url(), 12, 16);
   return out;
 }
 async function fetchTile(cache, url) {
@@ -1187,7 +1193,10 @@ async function openSettings() {
     <label class="f">Observateur (initiales ou nom)</label><input id="sObs" value="${esc(settings.observateur)}">
     <label class="f">Détecteurs (un par ligne)</label><textarea id="sDet" rows="6">${esc(settings.detecteurs.join('\n'))}</textarea>
     <label class="f">Types de gîtes des arbres (un par ligne)</label><textarea id="sGit" rows="7">${esc(settings.gites.join('\n'))}</textarea>
-    <label class="f">Zoom maximal du fond hors ligne</label>
+    <label class="f">Fonds à télécharger pour le hors ligne</label>
+    <div class="chips" data-k="fhl" data-multi="1">${Object.entries(FONDS).map(([k, f]) => `<button type="button" data-v="${k}" class="${(settings.fondsHorsLigne || []).includes(k) ? 'on' : ''}">${esc(f.nom)}</button>`).join('')}</div>
+    <label class="f">Clé IGN pour la Carte IGN (SCAN 25)</label><input id="sCle" value="${esc(settings.cleScan)}" placeholder="vide = clé générique IGN">
+    <label class="f">Zoom maximal de la photo aérienne hors ligne</label>
     <select id="sZoom">${[17, 18, 19].map(z => `<option value="${z}"${z === settings.zoomMax ? ' selected' : ''}>${z}${z === 18 ? ' (conseillé)' : z === 19 ? ' (très détaillé, 4× plus lourd)' : ' (léger)'}</option>`).join('')}</select>
     <p class="mut">${usage}${persisted ? ' · stockage protégé' : ' · stockage non protégé (Chrome peut l\'effacer si le téléphone manque de place)'}</p>
     <button class="btn pri" id="sOk">Enregistrer</button>
@@ -1195,10 +1204,15 @@ async function openSettings() {
     <button class="btn dan" id="sWipe">Tout effacer (sites, points, photos…)</button>
     <button class="btn" id="sNo">Fermer</button>`);
   const lines = id => $(id, sh).value.split('\n').map(s => s.trim()).filter(Boolean);
+  bindFormUi(sh);
   $('#sOk', sh).onclick = () => {
     settings.observateur = $('#sObs', sh).value.trim();
     settings.detecteurs = lines('#sDet'); settings.gites = lines('#sGit');
-    settings.zoomMax = +$('#sZoom', sh).value; saveSettings(); closeSheet(); toast('Réglages enregistrés');
+    settings.zoomMax = +$('#sZoom', sh).value;
+    settings.fondsHorsLigne = readFields(sh, [{ k: 'fhl', t: 'multi' }]).fhl;
+    const cle = $('#sCle', sh).value.trim();
+    if (cle !== settings.cleScan) { settings.cleScan = cle; refreshScanLayer(); }
+    saveSettings(); closeSheet(); toast('Réglages enregistrés');
   };
   $('#sTiles', sh).onclick = async () => {
     if (!await confirmSheet('Vider le cache des fonds de carte ? Il faudra les retélécharger pour travailler hors ligne.', 'Vider')) return;
@@ -1249,6 +1263,8 @@ async function init() {
   if (!settings.last.passage.detecteur && settings.last.station && settings.last.station.detecteur) settings.last.passage = { detecteur: settings.last.station.detecteur, nb_nuits: settings.last.station.nb_nuits };
   if (!settings.deviceId) settings.deviceId = uuid();
   saveSettings();
+  if (!settings.fondsHorsLigne) settings.fondsHorsLigne = ['ortho', 'scan25', 'plan'];
+  refreshScanLayer();
   (baseLayers[(FONDS[settings.fond] || FONDS.ortho).nom]).addTo(map);
   await migrate();
   await loadAll();
