@@ -1,4 +1,4 @@
-# Format d'échange ChiroTerrain ⇄ ChiroThèque — « chirosync » v1
+# Format d'échange ChiroTerrain ⇄ ChiroThèque — « chirosync » v2
 
 Ce document sert de cahier des charges pour développer la synchronisation côté ChiroThèque.
 
@@ -12,22 +12,26 @@ L'échange se fait **par fichier** : `*.chirosync.zip`, transmis par Bluetooth o
   - chaque enregistrement a un `id` unique (UUID) et une date `updatedAt` (ISO 8601 UTC) ;
   - on garde la version dont `updatedAt` est la plus récente ;
   - une suppression l'emporte si sa date `deletedAt` est postérieure ou égale à `updatedAt`.
+- **Stations : fusion passage par passage** (v2). Les champs de la station viennent de la version la plus récente. Les `passages` sont réunis par `id` : pour un même passage, on garde la version dont `updatedAt` est la plus récente. Un passage listé dans `passagesSupprimes` avec un `deletedAt` postérieur ou égal à son `updatedAt` est retiré. Deux observateurs peuvent donc ajouter chacun un passage à la même station sans rien perdre.
 - Le même paquet sert de **sauvegarde complète** et de transfert vers un autre téléphone.
 
 ## Contenu du ZIP
 
 ```
 donnees.json
-photos/<id_photo>.jpg      (facultatif)
+photos/mini/<id_photo>.jpg   miniature (240 px), toujours présente si elle existe
+photos/<id_photo>.jpg        photo en taille réelle (facultative)
 ```
+
+Les photos en taille réelle ne passent normalement pas par ce paquet. Elles partent sur le serveur photos via l'export « Photos du site » (ZIP rangé par site), puis sont supprimées du téléphone. Seules la miniature et les métadonnées restent.
 
 ## `donnees.json`
 
 ```jsonc
 {
   "format": "chirosync",
-  "version": 1,
-  "appli": "ChiroTerrain 1.1.0",            // ou "ChiroThèque x.y"
+  "version": 2,
+  "appli": "ChiroTerrain 1.2.0",            // ou "ChiroThèque x.y"
   "appareil": "uuid de l'appareil émetteur",
   "observateur": "MD",
   "exporte_le": "2026-11-19T13:38:46.741Z",
@@ -45,13 +49,16 @@ photos/<id_photo>.jpg      (facultatif)
     "id": "uuid", "type": "station", "siteId": "uuid | null",
     "lat": 43.2005, "lon": 1.0003, "x_l93": 537378.78, "y_l93": 6235535.09,
     "precision_m": 5 | null, "source_pos": "gps | gps moyenné (n pos.) | carte",
+    "type_station": "PEP | PEA",                // PEP = écoute passive (S01…), PEA = point d'écoute active (PE-1…)
     "code": "S02", "milieu": "Haie", "remarque": "",
     "passages": [{
-      "id": "uuid", "n": 1, "detecteur": "SM4BAT FS",
-      "date_pose": "2026-11-19T21:30",           // heure locale, sans fuseau
-      "date_releve": "2026-11-22T08:10" | "",    // "" = encore en place
-      "nb_nuits": 3 | "", "remarque": "", "observateur": "MD", "createdAt": "ISO"
+      "id": "uuid", "n": 1, "detecteur": "SM4BAT FS",   // PEA : matériel utilisé
+      "date_pose": "2026-11-19T21:30",           // heure locale, sans fuseau (PEA : début de l'écoute)
+      "date_releve": "2026-11-22T08:10" | "",    // "" = encore en place (PEA : fin de l'écoute)
+      "nb_nuits": 3 | "",                         // absent pour les PEA
+      "remarque": "", "observateur": "MD", "createdAt": "ISO", "updatedAt": "ISO"
     }],
+    "passagesSupprimes": [{ "id": "uuid du passage", "deletedAt": "ISO" }],
     "photoIds": ["uuid"], "observateur": "MD", "createdAt": "ISO", "updatedAt": "ISO"
   }],
 
@@ -77,7 +84,7 @@ photos/<id_photo>.jpg      (facultatif)
 
   "polygones": [{
     "id", "siteId", "geom": { "type": "Polygon", "coordinates": [...] },
-    "commentaire": "Jolie hêtraie bien ouverte", "milieu": "",
+    "code": "P01", "commentaire": "Jolie hêtraie bien ouverte", "milieu": "", "photoIds": ["uuid"],
     "surface_m2": 17633,                          // informatif, recalculé à l'import
     "observateur", "createdAt", "updatedAt"
   }],
@@ -90,15 +97,27 @@ photos/<id_photo>.jpg      (facultatif)
     "remarque": "", "observateur", "createdAt", "updatedAt"
   }],
 
-  "suppressions": [{ "id": "uuid", "type": "site | point | poly | meteo", "deletedAt": "ISO" }],
+  "suppressions": [{ "id": "uuid", "type": "site | point | poly | meteo | photo", "deletedAt": "ISO" }],
 
-  "photos": [{ "id": "uuid", "pointId": "uuid", "fichier": "photos/<id>.jpg" }]
+  "photos": [{
+    "id": "uuid",
+    "pointId": "uuid du point, du polygone ou du site",
+    "kind": "point | poly | site",              // site = photo liée au site seul (dossier « Autres »)
+    "passage": 2 | null,                        // n° de passage pour une photo de station
+    "legende": "", "ts": 1763600000000,         // date de prise (ms)
+    "lat": 43.2005 | null, "lon": 1.0003 | null, "observateur": "MD",
+    "exportedAt": "ISO" | null,                 // date de l'export vers le serveur photos
+    "chemin_export": "Martres-Tolosane/Stations/S01/Martres-Tolosane_S01_P2_2026-05-12_2.jpg",
+    "miniature": "photos/mini/<id>.jpg",
+    "fichier": "photos/<id>.jpg"                // seulement si la photo en taille réelle est jointe
+  }]
 }
 ```
 
 ## À prévoir côté ChiroThèque
 
 1. **Import** d'un paquet :
+   - appliquer la fusion passage par passage pour les stations ;
    - fusionner selon la règle ci-dessus ;
    - stocker les photos ;
    - rattacher les stations et leurs passages aux enregistrements audio, par `site` + `code` + `passage`, ou par `detecteur` + dates de pose et de relève.

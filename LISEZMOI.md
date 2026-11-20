@@ -1,4 +1,4 @@
-# ChiroTerrain 1.1 — appli web de terrain
+# ChiroTerrain 1.2 — appli web de terrain
 
 Appli Android, installée depuis Chrome, pour :
 
@@ -14,9 +14,27 @@ Les données restent sur le téléphone tant qu'on ne les exporte pas.
 
 ---
 
-## Mettre à jour depuis la v1.0
+## Nouveautés de la v1.2
 
-1. Dézippe `ChiroTerrain_v1.1.zip`.
+- **Points d'écoute active (PEA)** : dans le formulaire d'une station, choisis **PEP** (écoute passive) ou **PEA** (point d'écoute active).
+  - Un PEA est codé PE-1, PE-2… et s'affiche en bleu-vert sur la carte.
+  - Ses passages se notent avec le matériel, le début et la fin de l'écoute.
+- **Photos** :
+  - sur les **polygones**, qui ont maintenant un code (P01, P02…) ;
+  - sur le **site seul**, avec le bouton rond **PHOTO** de la carte et une légende facultative. On les retrouve dans *Sites › … › Photos du site* ;
+  - le **n° de passage** est enregistré avec chaque photo de station.
+- **Exporter les photos d'un site** (*☰* ou *Sites › …*) : un ZIP rangé en `Site/Stations/S01/`, `Points d'ecoute/PE-1/`, `Arbres/A01/`, `Polygones/P01 - commentaire/`, `Observations/O01/` et `Autres/`, avec un fichier `photos.csv` récapitulatif.
+  - Les photos sont nommées `Site_Code_P2_2026-05-12_1.jpg`.
+  - Une case permet de n'exporter **que les nouvelles photos**.
+- **Libérer la place** : une fois le ZIP copié sur le PC (dans l'Explorateur, *Couper* depuis *Téléchargements* du téléphone, puis *Coller* sur le serveur), le bouton **Supprimer ces photos du téléphone** les efface.
+  - Une miniature et le nom du fichier sur le serveur restent visibles dans les fiches, avec la mention « serveur ».
+  - Les photos supprimées ne reviennent jamais sur le téléphone, même après une synchronisation.
+- **Synchronisation plus sûre** : si deux personnes ajoutent chacune un passage à la même station, les deux passages sont conservés. Les suppressions de passages et de photos sont aussi transmises.
+- **Carte IGN (SCAN 25)**, depuis la v1.1.1, avec la clé générique IGN. La clé Mica se colle dans *Réglages* quand vous l'aurez.
+
+## Mettre à jour
+
+1. Dézippe `ChiroTerrain_v1.2.zip`.
 2. Dans Chrome sur le PC, va sur `https://github.com/TON-NOM/chiroterrain/upload`.
 3. Glisse **tout le contenu** du dossier `chiroterrain` dans la zone, puis clique sur **Commit changes**. Les anciens fichiers sont remplacés.
 4. Attends 2 minutes, puis ouvre l'appli sur le téléphone : le bandeau jaune **« Nouvelle version disponible »** apparaît. Appuie sur **Mettre à jour**.
@@ -63,13 +81,13 @@ Voir les étapes déjà suivies : publication du dossier sur GitHub Pages, puis,
 - **Synchroniser avec ChiroThèque** (*☰*) :
   - **Envoyer** : prépare un paquet `.chirosync.zip` avec toutes les données, photos comprises si la case est cochée. On le partage ensuite par Bluetooth vers le PC ou on le récupère par USB dans *Téléchargements*.
   - **Recevoir** : importe un paquet venant de ChiroThèque ou d'un collègue. Les données sont fusionnées : la version la plus récente l'emporte, et les suppressions sont propagées.
-  - Ce paquet sert aussi de **sauvegarde complète** : pense à en faire un régulièrement.
+  - Par défaut, le paquet ne contient que les **miniatures** des photos : les photos en taille réelle passent par *Exporter les photos d'un site*. Coche « Inclure les photos en taille réelle » pour une **sauvegarde complète** ou pour changer de téléphone.
 - **Exporter pour QGIS** : un ZIP qui contient :
   - `stations.geojson` (1 point par station) et `stations_passages.geojson` (1 ligne par passage) ;
   - `arbres_gites.geojson`, `observations.geojson` et `polygones.geojson` ;
   - `meteo.csv` ;
   - les mêmes couches en CSV Lambert-93 ;
-  - le dossier `photos/`.
+  - l'attribut `photos` de chaque couche, qui donne le nom des fichiers tels qu'ils apparaissent dans l'export des photos du site.
 
 Le format du paquet de synchronisation est décrit dans `FORMAT_CHIROSYNC.md`. Ce document sert de cahier des charges pour ChiroThèque.
 

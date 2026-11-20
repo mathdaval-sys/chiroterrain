@@ -1,7 +1,7 @@
 /* ChiroTerrain — appli web de terrain (stations, arbres gîtes, observations, habitats, météo) */
 'use strict';
 const APP = 'ChiroTerrain';
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 
 /* ---------- Projections ---------- */
 proj4.defs('EPSG:2154', '+proj=lcc +lat_0=46.5 +lon_0=3 +lat_1=49 +lat_2=44 +x_0=700000 +y_0=6600000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
@@ -32,7 +32,8 @@ const PLUIE = ['Nulle', 'Faible', 'Modérée', 'Forte'];
 
 const FORMS = {
   station: [
-    { k: 'code', l: 'Code station', t: 'text' },
+    { k: 'type_station', l: 'Type', t: 'chips', opts: [{ v: 'PEP', l: 'PEP — écoute passive' }, { v: 'PEA', l: 'PEA — point d\'écoute active' }] },
+    { k: 'code', l: 'Code', t: 'text' },
     { k: 'milieu', l: 'Milieu', t: 'select', opts: MILIEUX },
     { k: 'remarque', l: 'Remarque sur la station', t: 'textarea' },
   ],
@@ -57,6 +58,7 @@ const FORMS = {
     { k: 'remarque', l: 'Remarque', t: 'textarea' },
   ],
   poly: [
+    { k: 'code', l: 'Code', t: 'text' },
     { k: 'commentaire', l: 'Commentaire', t: 'textarea', ph: 'Ex. : jolie hêtraie bien ouverte, prairie surpâturée…' },
     { k: 'milieu', l: 'Milieu (facultatif)', t: 'datalist', opts: MILIEUX },
   ],
@@ -67,6 +69,13 @@ const PASSAGE = [
   { k: 'date_pose', l: 'Date et heure de pose', t: 'datetime' },
   { k: 'date_releve', l: 'Date et heure de relève', t: 'datetime' },
   { k: 'nb_nuits', l: 'Nombre de nuits', t: 'number', step: '1' },
+  { k: 'remarque', l: 'Remarque sur le passage', t: 'textarea' },
+];
+const PASSAGE_PEA = [
+  { k: 'n', l: 'N° de passage', t: 'number', step: '1' },
+  { k: 'detecteur', l: 'Matériel', t: 'select', opts: () => settings.detecteurs },
+  { k: 'date_pose', l: 'Début de l\'écoute', t: 'datetime' },
+  { k: 'date_releve', l: 'Fin de l\'écoute', t: 'datetime' },
   { k: 'remarque', l: 'Remarque sur le passage', t: 'textarea' },
 ];
 // Valeurs reprises d'une saisie à l'autre
@@ -224,12 +233,13 @@ function drawSites() {
   }
 }
 const lastPassage = p => (p.passages || []).reduce((a, b) => (!a || (b.n || 0) >= (a.n || 0) ? b : a), null);
-const isPending = p => { const lp = lastPassage(p); return !!lp && !lp.date_releve; };
+const isPending = p => { if ((p.data || {}).type_station === 'PEA') return false; const lp = lastPassage(p); return !!lp && !lp.date_releve; };
 function markerHtml(p, n = 0) {
   let code = esc(p.data.code || TYPES[p.type].pre), off = '';
-  if (p.type === 'station') { const lp = lastPassage(p); if (lp) code += `<small>P${esc(lp.n)}</small>`; if (!isPending(p)) off = ' off'; }
+  const pea = p.type === 'station' && p.data.type_station === 'PEA';
+  if (p.type === 'station') { const lp = lastPassage(p); if (lp) code += `<small>P${esc(lp.n)}</small>`; if (!pea && !isPending(p)) off = ' off'; }
   const shift = n ? ` style="margin-left:${n * 16}px;margin-top:${n * 16}px"` : '';
-  return `<div class="mk mk-${p.type}${off}"${shift}>${code}</div>`;
+  return `<div class="mk mk-${p.type}${pea ? ' mk-pea' : ''}${off}"${shift}>${code}</div>`;
 }
 function drawPoints() {
   pointsLayer.clearLayers();
@@ -297,6 +307,7 @@ $('#btnFollow').onclick = () => {
 map.on('dragstart', () => { if (follow) setFollow(false); });
 $('#btnFit').onclick = () => { const s = activeSite(); if (s && hasGeom(s)) fitSite(s); else openSites(); };
 $('#btnMeteo').onclick = () => openMeteo();
+$('#btnPhoto').onclick = () => addSitePhoto();
 
 /* ---------- Feuilles (fenêtres du bas) ---------- */
 let sheetLock = false;
@@ -410,10 +421,13 @@ function averageGps(sec) {
     $('#avgEnd', sh).onclick = finish;
   });
 }
-function nextCode(type, siteId) {
-  const pre = TYPES[type].pre; let max = 0;
-  points.filter(p => p.type === type && p.siteId === siteId).forEach(p => { const m = String(p.data.code || '').match(new RegExp('^' + pre + '(\\d+)$')); if (m) max = Math.max(max, +m[1]); });
-  return pre + String(max + 1).padStart(2, '0');
+function nextCode(type, siteId, pea = false) {
+  const pre = type === 'poly' ? 'P' : type === 'station' && pea ? 'PE-' : TYPES[type].pre;
+  const pad = pre === 'PE-' ? 1 : 2;
+  const list = type === 'poly' ? polys.filter(p => p.siteId === siteId) : points.filter(p => p.type === type && p.siteId === siteId);
+  const re = new RegExp('^' + pre.replace('-', '\\-') + '(\\d+)$'); let max = 0;
+  list.forEach(p => { const m = String((p.data || {}).code || '').match(re); if (m) max = Math.max(max, +m[1]); });
+  return pre + String(max + 1).padStart(pad, '0');
 }
 
 /* ---------- Champs de formulaire ---------- */
@@ -480,9 +494,62 @@ async function resizeImage(file) {
     return await new Promise(r => c.toBlob(b => r(b || file), 'image/jpeg', 0.82));
   } catch (e) { return file; }
 }
+async function makeThumb(blob) {
+  try {
+    const bmp = await createImageBitmap(blob); const k = Math.min(1, 240 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    return await new Promise(r => c.toBlob(b => r(b), 'image/jpeg', 0.7));
+  } catch (e) { return null; }
+}
+function pickPhotos(cb) {
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment'; inp.multiple = true;
+  inp.onchange = () => inp.files.length && cb([...inp.files]); inp.click();
+}
 const siteOptions = sel => [...sites].sort((a, b) => a.nom.localeCompare(b.nom, 'fr')).map(s => `<option value="${s.id}"${s.id === sel ? ' selected' : ''}>${esc(s.nom)}</option>`).join('');
 
+/* ---------- Photos : éditeur commun (points, polygones) ---------- */
+const PHOTO_UI = `<label class="f">Photos</label><div class="thumbs" id="thumbs"></div>
+    <label class="btn" for="phIn">Ajouter une photo</label><input id="phIn" type="file" accept="image/*" capture="environment" multiple hidden>`;
+const photoSrc = p => URL.createObjectURL(p.blob || p.thumb);
+async function newPhotoRec(file, ownerId, kind, extra = {}) {
+  const blob = await resizeImage(file);
+  return { id: uuid(), pointId: ownerId, kind, passage: extra.passage ?? null, legende: extra.legende || '', blob, thumb: await makeThumb(blob), ts: Date.now(),
+    lat: gps ? +gps.lat.toFixed(7) : null, lon: gps ? +gps.lon.toFixed(7) : null, exportedAt: null, fichier: '', observateur: settings.observateur };
+}
+async function photoEditor(sh, ownerId, kind) {
+  const photos = ownerId ? (await photosOf(ownerId)).sort((a, b) => a.ts - b.ts).map(p => ({ ...p, url: photoSrc(p) })) : [];
+  const removed = [], box = $('#thumbs', sh);
+  const draw = () => { box.innerHTML = photos.map((p, i) => `<div><img src="${p.url}" data-i="${i}">${p.blob ? '' : '<span class="exp">serveur</span>'}<button class="x" data-del="${i}">×</button></div>`).join(''); };
+  draw();
+  box.onclick = e => {
+    const del = e.target.dataset.del;
+    if (del != null) { const [p] = photos.splice(+del, 1); if (!p.isNew) removed.push(p.id); draw(); }
+    else if (e.target.dataset.i != null) viewPhoto(photos[+e.target.dataset.i]);
+  };
+  $('#phIn', sh).onchange = async e => {
+    for (const f of e.target.files) { const r = await newPhotoRec(f, ownerId, kind); photos.push({ ...r, url: URL.createObjectURL(r.blob), isNew: true }); }
+    e.target.value = ''; draw();
+  };
+  return {
+    async save(owner, passage = null) {
+      for (const id of removed) { await dbDel('photos', id); await tombstone('photo', id); }
+      for (const ph of photos.filter(x => x.isNew)) { const { url, isNew, ...rec } = ph; rec.pointId = owner; rec.passage = passage; await dbPut('photos', rec); }
+      return photos.map(x => x.id);
+    },
+  };
+}
+function viewPhoto(p) {
+  const v = $('#photoView');
+  $('img', v).src = typeof p === 'string' ? p : photoSrc(p);
+  const note = typeof p === 'string' ? '' : [p.legende, p.blob ? '' : `Photo transférée${p.fichier ? ' : ' + p.fichier : ''} (miniature)`].filter(Boolean).join(' — ');
+  $('#photoNote').textContent = note; $('#photoNote').style.display = note ? 'block' : 'none';
+  v.style.display = 'flex'; v.onclick = () => v.style.display = 'none';
+}
+
 /* ---------- Formulaire point (station + passage, arbre, observation) ---------- */
+const isPea = p => (p.data || p).type_station === 'PEA';
+const passageFields = pea => pea ? PASSAGE_PEA : PASSAGE;
 // passageMode : null (station seule), 'new' (nouveau passage) ou id d'un passage à modifier
 async function openForm(type, point, loc, passageMode = null) {
   const T = TYPES[type], isNew = !point;
@@ -491,7 +558,8 @@ async function openForm(type, point, loc, passageMode = null) {
   const data = point ? { ...point.data } : {};
   if (isNew) {
     for (const k of MEMO[type]) if (settings.last[type][k] != null) data[k] = settings.last[type][k];
-    data.code = nextCode(type, siteId);
+    if (type === 'station') data.type_station = settings.last.station.type_station || 'PEP';
+    data.code = nextCode(type, siteId, type === 'station' && data.type_station === 'PEA');
   }
   let pdata = null;
   if (passageMode === 'new') {
@@ -500,91 +568,92 @@ async function openForm(type, point, loc, passageMode = null) {
     for (const k of MEMO.passage) { const v = lp ? lp[k] : settings.last.passage[k]; if (v != null && v !== '') pdata[k] = v; }
   } else if (passageMode) pdata = { ...(point.passages.find(x => x.id === passageMode) || {}) };
   let autoCode = isNew ? data.code : null;
-  const photos = point ? (await photosOf(point.id)).map(p => ({ ...p, url: URL.createObjectURL(p.blob) })) : [];
-  const removed = [];
   const where = point || loc;
+  const nomType = type === 'station' && isPea(data) ? 'Point d\'écoute' : T.court;
   const titre = isNew ? 'Nouveau point' : passageMode === 'new' ? `Nouveau passage` : passageMode ? `Passage ${esc(pdata.n)}` : 'Modifier';
-  const sh = openSheet(`<h2><span class="badge bg-${T.cls}">${T.court}</span> ${titre}</h2>
+  const sh = openSheet(`<h2><span class="badge bg-${T.cls}">${nomType}</span> ${titre}</h2>
     <p class="mut">${where.lat.toFixed(6)}, ${where.lon.toFixed(6)} — ${esc(where.source || '')}${where.acc ? ` ±${where.acc} m` : ''}</p>
     <label class="f" for="f_site">Site</label><select id="f_site"><option value="">Hors site</option>${siteOptions(siteId)}</select>
     <div id="frm">${FORMS[type].map(f => fieldHtml(f, data[f.k])).join('')}</div>
-    ${pdata ? `<h3>Passage</h3><div id="pfrm">${PASSAGE.map(f => fieldHtml(f, pdata[f.k], 'p_')).join('')}</div>` : ''}
-    <label class="f">Photos</label><div class="thumbs" id="thumbs"></div>
-    <label class="btn" for="phIn">Ajouter une photo</label><input id="phIn" type="file" accept="image/*" capture="environment" multiple hidden>
+    ${pdata ? `<h3>Passage</h3><div id="pfrm">${passageFields(isPea(data)).map(f => fieldHtml(f, pdata[f.k], 'p_')).join('')}</div>` : ''}
+    ${PHOTO_UI}
     <button class="btn ${T.cls}" id="fSave">Enregistrer</button>
     ${pdata && passageMode !== 'new' ? '<button class="btn dan" id="fDelP">Supprimer ce passage</button>' : ''}
     <button class="btn" id="fNo">Annuler</button>`);
   sheetLock = true; bindFormUi(sh);
-  const drawThumbs = () => { $('#thumbs', sh).innerHTML = photos.map((p, i) => `<div><img src="${p.url}" data-i="${i}"><button class="x" data-del="${i}">×</button></div>`).join(''); };
-  drawThumbs();
-  $('#thumbs', sh).onclick = e => {
-    const del = e.target.dataset.del;
-    if (del != null) { const [p] = photos.splice(+del, 1); if (!p.isNew) removed.push(p.id); drawThumbs(); }
-    else if (e.target.dataset.i != null) viewPhoto(photos[+e.target.dataset.i].url);
-  };
-  $('#phIn', sh).onchange = async e => {
-    for (const f of e.target.files) { const blob = await resizeImage(f); photos.push({ id: uuid(), blob, url: URL.createObjectURL(blob), isNew: true }); }
-    e.target.value = ''; drawThumbs();
-  };
+  const pe = await photoEditor(sh, point ? point.id : null, 'point');
+  const curPea = () => type === 'station' && readFields(sh, [FORMS.station[0]]).type_station === 'PEA';
+  let wasPea = type === 'station' && isPea(data);
+  if (type === 'station') sh.addEventListener('click', e => {
+    if (!e.target.closest('.chips[data-k="type_station"]')) return;
+    const nowPea = curPea(); if (nowPea === wasPea) return; wasPea = nowPea;
+    const c = $('[name="code"]', sh);
+    if (autoCode && c.value === autoCode) { autoCode = nextCode('station', $('#f_site', sh).value || null, nowPea); c.value = autoCode; }
+    if (pdata) { const keep = readFields(sh, passageFields(!nowPea), 'p_'); $('#pfrm', sh).innerHTML = passageFields(nowPea).map(f => fieldHtml(f, keep[f.k], 'p_')).join(''); }
+    $('h2 .badge', sh).textContent = nowPea ? 'Point d\'écoute' : 'Station';
+  });
   $('#f_site', sh).onchange = e => {
     const c = $('[name="code"]', sh);
-    if (autoCode && c.value === autoCode) { autoCode = nextCode(type, e.target.value || null); c.value = autoCode; }
+    if (autoCode && c.value === autoCode) { autoCode = nextCode(type, e.target.value || null, curPea()); c.value = autoCode; }
   };
   $('#fNo', sh).onclick = closeSheet;
   if ($('#fDelP', sh)) $('#fDelP', sh).onclick = async () => {
-    if (!await confirmSheet(`Supprimer le passage ${esc(pdata.n)} de la station ${esc(point.data.code)} ?`, 'Supprimer')) return openForm(type, point, null, passageMode);
-    point.passages = point.passages.filter(x => x.id !== passageMode); point.updatedAt = nowIso();
-    await dbPut('points', point); drawPoints(); toast('Passage supprimé');
+    if (!await confirmSheet(`Supprimer le passage ${esc(pdata.n)} de ${esc(point.data.code)} ?`, 'Supprimer')) return openForm(type, point, null, passageMode);
+    point.passages = point.passages.filter(x => x.id !== passageMode);
+    (point.passagesSupprimes = point.passagesSupprimes || []).push({ id: passageMode, deletedAt: nowIso() });
+    point.updatedAt = nowIso(); await dbPut('points', point); drawPoints(); toast('Passage supprimé');
   };
   $('#fSave', sh).onclick = async () => {
     const d = readFields(sh, FORMS[type]);
+    if (type === 'station' && !d.type_station) d.type_station = 'PEP';
     const p = point || { id: uuid(), type, lat: loc.lat, lon: loc.lon, acc: loc.acc, source: loc.source, createdAt: nowIso(), observateur: settings.observateur, photoIds: [] };
     if (type === 'station' && !p.passages) p.passages = [];
     p.siteId = $('#f_site', sh).value || null; p.data = d; p.updatedAt = nowIso();
+    let passageN = null;
     if (pdata) {
-      const pd = readFields(sh, PASSAGE, 'p_');
-      if (passageMode === 'new') p.passages.push({ id: uuid(), ...pd, observateur: settings.observateur, createdAt: nowIso() });
-      else Object.assign(p.passages.find(x => x.id === passageMode), pd);
+      const pd = readFields(sh, passageFields(d.type_station === 'PEA'), 'p_');
+      if (passageMode === 'new') p.passages.push({ id: uuid(), ...pd, observateur: settings.observateur, createdAt: nowIso(), updatedAt: nowIso() });
+      else Object.assign(p.passages.find(x => x.id === passageMode), pd, { updatedAt: nowIso() });
       p.passages.sort((a, b) => (+a.n || 0) - (+b.n || 0));
       for (const k of MEMO.passage) if (pd[k] !== '' && pd[k] != null) settings.last.passage[k] = pd[k];
-    }
-    for (const id of removed) await dbDel('photos', id);
-    for (const ph of photos.filter(x => x.isNew)) await dbPut('photos', { id: ph.id, pointId: p.id, blob: ph.blob, ts: Date.now() });
-    p.photoIds = photos.map(x => x.id);
+      passageN = pd.n;
+    } else if (type === 'station') passageN = (lastPassage(p) || {}).n ?? null;
+    p.photoIds = await pe.save(p.id, passageN);
     await dbPut('points', p);
     if (isNew) points.push(p);
     for (const k of MEMO[type]) if (d[k] !== '' && d[k] != null) settings.last[type][k] = d[k];
+    if (type === 'station') settings.last.station.type_station = d.type_station;
     saveSettings(); askPersist(); closeSheet(); drawPoints();
-    let msg = `${T.court} ${d.code || ''} enregistrée`;
+    let msg = `${type === 'station' && d.type_station === 'PEA' ? 'Point d\'écoute' : T.court} ${d.code || ''} enregistré`;
     if (type === 'station' && passageMode === 'new' && p.siteId && !meteos.some(m => m.siteId === p.siteId && m.date === today())) msg += ' — pensez à la météo du jour';
     toast(msg, 3500);
   };
 }
-function viewPhoto(url) { const v = $('#photoView'); $('img', v).src = url; v.style.display = 'flex'; v.onclick = () => v.style.display = 'none'; }
 
 /* ---------- Fiche d'un point ---------- */
+const thumbsHtml = ph => ph.sort((a, b) => a.ts - b.ts).map((f, i) => `<div><img data-i="${i}" src="${photoSrc(f)}">${f.blob ? '' : '<span class="exp">serveur</span>'}</div>`).join('');
 async function showPoint(id) {
   const p = points.find(x => x.id === id); if (!p) return;
-  const T = TYPES[p.type], s = siteById(p.siteId);
+  const T = TYPES[p.type], s = siteById(p.siteId), pea = p.type === 'station' && isPea(p);
   const [x, y] = toL93(p.lon, p.lat);
   const ph = await photosOf(p.id);
   const d = gps ? dist(gps.lat, gps.lon, p.lat, p.lon) : null;
   const passages = p.type === 'station' ? `<h3>Passages (${p.passages.length})</h3>
-    <ul class="list" id="pPass">${[...p.passages].reverse().map(a => `<li><div class="t"><b>Passage ${esc(a.n)} — ${esc(a.detecteur || 'détecteur ?')}</b>
-      <small>pose ${esc(fmtDate(a.date_pose)) || '?'}${a.date_releve ? ` · relève ${esc(fmtDate(a.date_releve))}` : ' · <b>en place</b>'}${a.nb_nuits ? ` · ${esc(a.nb_nuits)} nuit(s)` : ''}${a.remarque ? '<br>' + esc(a.remarque) : ''}</small></div>
-      ${a.date_releve ? '' : `<button class="btn sm st" data-rel="${a.id}">Relever</button>`}<button class="btn sm" data-edp="${a.id}">Modifier</button></li>`).join('')}</ul>
+    <ul class="list" id="pPass">${[...p.passages].reverse().map(a => `<li><div class="t"><b>Passage ${esc(a.n)} — ${esc(a.detecteur || (pea ? 'matériel ?' : 'détecteur ?'))}</b>
+      <small>${pea ? 'début' : 'pose'} ${esc(fmtDate(a.date_pose)) || '?'}${a.date_releve ? ` · ${pea ? 'fin' : 'relève'} ${esc(fmtDate(a.date_releve))}` : (pea ? '' : ' · <b>en place</b>')}${a.nb_nuits && !pea ? ` · ${esc(a.nb_nuits)} nuit(s)` : ''}${a.remarque ? '<br>' + esc(a.remarque) : ''}</small></div>
+      ${a.date_releve || pea ? '' : `<button class="btn sm st" data-rel="${a.id}">Relever</button>`}<button class="btn sm" data-edp="${a.id}">Modifier</button></li>`).join('')}</ul>
     <button class="btn st" id="pAddP">+ Ajouter un passage</button>` : '';
-  const sh = openSheet(`<h2><span class="badge bg-${T.cls}">${T.court}</span> ${esc(p.data.code || '')}</h2>
+  const sh = openSheet(`<h2><span class="badge bg-${T.cls}">${pea ? 'Point d\'écoute' : T.court}</span> ${esc(p.data.code || '')}</h2>
     <p class="mut">${esc(s ? s.nom : 'Hors site')} · ${zoneOf(p.lat, p.lon, p.siteId)}${d != null ? ` · à ${fmtDist(d)}` : ''}</p>
     ${passages}
     <table class="kv">${kvRows(FORMS[p.type], p.data, ['code'])}
       <tr><td>Position</td><td>${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}<br>L93 : ${Math.round(x)} / ${Math.round(y)}<br><span class="mut">${esc(p.source || '')}${p.acc ? ` ±${p.acc} m` : ''}</span></td></tr>
       <tr><td>Saisi</td><td>${esc(isoLocal(p.createdAt))} ${esc(p.observateur || '')}</td></tr></table>
-    <div class="thumbs" id="pThumbs">${ph.map((f, i) => `<div><img data-i="${i}" src="${URL.createObjectURL(f.blob)}"></div>`).join('')}</div>
-    <div class="row"><button class="btn pri" id="pEdit">Modifier ${p.type === 'station' ? 'la station' : ''}</button><button class="btn" id="pMove">Déplacer</button></div>
+    <div class="thumbs" id="pThumbs">${thumbsHtml(ph)}</div>
+    <div class="row"><button class="btn pri" id="pEdit">Modifier ${p.type === 'station' ? (pea ? 'le point' : 'la station') : ''}</button><button class="btn" id="pMove">Déplacer</button></div>
     <div class="row"><a class="btn" href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}" target="_blank" rel="noopener">Itinéraire</a><button class="btn dan" id="pDel">Supprimer</button></div>
     <button class="btn" id="pClose">Fermer</button>`);
-  $('#pThumbs', sh).onclick = e => { if (e.target.dataset.i != null) viewPhoto(e.target.src); };
+  $('#pThumbs', sh).onclick = e => { if (e.target.dataset.i != null) viewPhoto(ph[+e.target.dataset.i]); };
   $('#pClose', sh).onclick = closeSheet;
   $('#pEdit', sh).onclick = () => openForm(p.type, p);
   if (p.type === 'station') {
@@ -602,18 +671,23 @@ async function showPoint(id) {
     await dbPut('points', p); drawPoints(); toast('Point déplacé');
   };
   $('#pDel', sh).onclick = async () => {
-    if (!await confirmSheet(`Supprimer ${esc(T.court.toLowerCase())} ${esc(p.data.code || '')}${p.type === 'station' ? ` (${p.passages.length} passage(s))` : ''} et ses photos ?`, 'Supprimer')) return;
+    if (!await confirmSheet(`Supprimer ${esc((pea ? 'Point d\'écoute' : T.court).toLowerCase())} ${esc(p.data.code || '')}${p.type === 'station' ? ` (${p.passages.length} passage(s))` : ''} et ses photos ?`, 'Supprimer')) return;
     await deletePoint(p); drawPoints(); toast('Point supprimé');
   };
 }
 async function releve(p, passageId) {
   const a = p.passages.find(x => x.id === passageId); if (!a) return;
-  a.date_releve = nowLocal(); p.updatedAt = nowIso(); await dbPut('points', p); drawPoints();
+  a.date_releve = nowLocal(); a.updatedAt = nowIso(); p.updatedAt = nowIso(); await dbPut('points', p); drawPoints();
   toast(`Station ${p.data.code} — passage ${a.n} relevé`); closeSheet();
 }
+async function deleteOwnerPhotos(ownerId) { for (const f of await photosOf(ownerId)) { await dbDel('photos', f.id); await tombstone('photo', f.id); } }
 async function deletePoint(p) {
-  for (const f of await photosOf(p.id)) await dbDel('photos', f.id);
+  await deleteOwnerPhotos(p.id);
   await dbDel('points', p.id); await tombstone('point', p.id); points = points.filter(x => x.id !== p.id);
+}
+async function deletePoly(pg) {
+  await deleteOwnerPhotos(pg.id);
+  await dbDel('polys', pg.id); await tombstone('poly', pg.id); polys = polys.filter(x => x.id !== pg.id);
 }
 
 /* ---------- Polygones commentés (habitats) ---------- */
@@ -621,40 +695,178 @@ async function addPoly() {
   const geom = await drawPolygon('Nouveau polygone');
   if (geom) openPolyForm(null, geom);
 }
-function openPolyForm(pg, geom) {
+async function openPolyForm(pg, geom) {
   const isNew = !pg; const g = pg ? pg.geom : geom;
   const ring = g.coordinates[0]; const c = ring.reduce((a, [x, y]) => [a[0] + y / ring.length, a[1] + x / ring.length], [0, 0]);
   const siteId = pg ? pg.siteId : ((siteAt(c[0], c[1]) || activeSite() || {}).id || null);
+  const data = pg ? { ...pg.data } : { code: nextCode('poly', siteId) };
+  let autoCode = isNew ? data.code : null;
   const sh = openSheet(`<h2><span class="badge bg-pg">Polygone</span> ${isNew ? 'Nouveau' : 'Modifier'}</h2>
     <p class="mut">${fmtSurf(areaM2(g))}</p>
     <label class="f" for="f_site">Site</label><select id="f_site"><option value="">Hors site</option>${siteOptions(siteId)}</select>
-    ${FORMS.poly.map(f => fieldHtml(f, pg ? pg.data[f.k] : '')).join('')}
+    ${FORMS.poly.map(f => fieldHtml(f, data[f.k])).join('')}
+    ${PHOTO_UI}
     <button class="btn pg" id="gSave">Enregistrer</button><button class="btn" id="gNo">Annuler</button>`);
   sheetLock = true; bindFormUi(sh);
+  const id = pg ? pg.id : uuid();
+  const pe = await photoEditor(sh, pg ? pg.id : null, 'poly');
   setTimeout(() => { const t = $('[name="commentaire"]', sh); if (t && isNew) t.focus(); }, 200);
+  $('#f_site', sh).onchange = e => { const cc = $('[name="code"]', sh); if (autoCode && cc.value === autoCode) { autoCode = nextCode('poly', e.target.value || null); cc.value = autoCode; } };
   $('#gNo', sh).onclick = closeSheet;
   $('#gSave', sh).onclick = async () => {
-    const p = pg || { id: uuid(), geom: g, createdAt: nowIso(), observateur: settings.observateur };
+    const p = pg || { id, geom: g, createdAt: nowIso(), observateur: settings.observateur };
     p.siteId = $('#f_site', sh).value || null; p.data = readFields(sh, FORMS.poly); p.updatedAt = nowIso();
+    p.photoIds = await pe.save(p.id);
     await dbPut('polys', p); if (isNew) polys.push(p);
-    closeSheet(); drawPolys(); toast('Polygone enregistré');
+    closeSheet(); drawPolys(); toast(`Polygone ${p.data.code || ''} enregistré`);
   };
 }
-function showPoly(id) {
+async function showPoly(id) {
   const pg = polys.find(x => x.id === id); if (!pg) return;
-  const s = siteById(pg.siteId);
-  const sh = openSheet(`<h2><span class="badge bg-pg">Polygone</span> ${esc(pg.data.milieu || '')}</h2>
+  const s = siteById(pg.siteId), ph = await photosOf(pg.id);
+  const sh = openSheet(`<h2><span class="badge bg-pg">Polygone</span> ${esc(pg.data.code || '')} ${esc(pg.data.milieu || '')}</h2>
     <p class="mut">${esc(s ? s.nom : 'Hors site')} · ${fmtSurf(areaM2(pg.geom))}</p>
     <p>${esc(pg.data.commentaire || '')}</p><p class="mut">Saisi ${esc(isoLocal(pg.createdAt))} ${esc(pg.observateur || '')}</p>
+    <div class="thumbs" id="gThumbs">${thumbsHtml(ph)}</div>
     <div class="row"><button class="btn pri" id="gEdit">Modifier</button><button class="btn" id="gRedraw">Redessiner</button></div>
     <button class="btn dan" id="gDel">Supprimer</button><button class="btn" id="gClose">Fermer</button>`);
+  $('#gThumbs', sh).onclick = e => { if (e.target.dataset.i != null) viewPhoto(ph[+e.target.dataset.i]); };
   $('#gClose', sh).onclick = closeSheet;
   $('#gEdit', sh).onclick = () => openPolyForm(pg);
   $('#gRedraw', sh).onclick = async () => { const g = await drawPolygon('Redessiner le polygone'); if (!g) return; pg.geom = g; pg.updatedAt = nowIso(); await dbPut('polys', pg); drawPolys(); toast('Polygone redessiné'); };
   $('#gDel', sh).onclick = async () => {
-    if (!await confirmSheet('Supprimer ce polygone ?', 'Supprimer')) return;
-    await dbDel('polys', pg.id); await tombstone('poly', pg.id); polys = polys.filter(x => x.id !== pg.id); drawPolys(); toast('Polygone supprimé');
+    if (!await confirmSheet('Supprimer ce polygone et ses photos ?', 'Supprimer')) return;
+    await deletePoly(pg); drawPolys(); toast('Polygone supprimé');
   };
+}
+
+/* ---------- Photos du site (sans point) ---------- */
+async function addSitePhoto() {
+  let s = activeSite();
+  if (!s) { const id = await pickSite('Photo : choisir le site'); if (!id) return; s = siteById(id); }
+  pickPhotos(async files => {
+    const recs = [];
+    for (const f of files) { const r = await newPhotoRec(f, s.id, 'site'); await dbPut('photos', r); recs.push(r); }
+    askPersist();
+    const sh = openSheet(`<h2>Photo du site « ${esc(s.nom)} »</h2>
+      <div class="thumbs">${recs.map(r => `<div><img src="${photoSrc(r)}"></div>`).join('')}</div>
+      <label class="f">Légende (facultatif)</label><input id="lgd" placeholder="Ex. : accès par le chemin du bas">
+      <button class="btn pri" id="lOk">Enregistrer</button><button class="btn" id="lNo">Sans légende</button>`);
+    setTimeout(() => $('#lgd', sh).focus(), 200);
+    $('#lOk', sh).onclick = async () => { const t = $('#lgd', sh).value.trim(); for (const r of recs) { r.legende = t; await dbPut('photos', r); } closeSheet(); toast(`${recs.length} photo(s) ajoutée(s) au site`); };
+    $('#lNo', sh).onclick = () => { closeSheet(); toast(`${recs.length} photo(s) ajoutée(s) au site`); };
+  });
+}
+async function openSitePhotos(s) {
+  const ph = (await photosOf(s.id)).sort((a, b) => a.ts - b.ts);
+  const sh = openSheet(`<h2>Photos du site — ${esc(s.nom)}</h2>
+    <p class="mut">Photos rattachées au site seul (dossier « Autres » à l'export).</p>
+    <ul class="list" id="spList">${ph.map((f, i) => `<li><img src="${photoSrc(f)}" data-i="${i}" style="width:64px;height:64px;object-fit:cover;border-radius:6px"><div class="t"><b>${esc(f.legende || 'Sans légende')}</b><small>${esc(isoLocal(new Date(f.ts).toISOString()))}${f.blob ? '' : ' · transférée'}</small></div><button class="btn sm dan" data-del="${f.id}">×</button></li>`).join('')}</ul>
+    ${ph.length ? '' : '<p class="mut">Aucune photo pour l\'instant.</p>'}
+    <button class="btn pri" id="spAdd">Ajouter une photo</button><button class="btn" id="spBack">Retour</button>`);
+  $('#spList', sh).onclick = async e => {
+    if (e.target.dataset.i != null) viewPhoto(ph[+e.target.dataset.i]);
+    const del = e.target.dataset.del;
+    if (del) { if (!await confirmSheet('Supprimer cette photo ?', 'Supprimer')) return openSitePhotos(s); await dbDel('photos', del); await tombstone('photo', del); openSitePhotos(s); }
+  };
+  $('#spAdd', sh).onclick = () => { closeSheet(); setActive(s.id, false); addSitePhoto(); };
+  $('#spBack', sh).onclick = () => siteMenu(s);
+}
+
+/* ---------- Export des photos d'un site (ZIP) ---------- */
+// noms de dossiers sans accents : l'Explorateur Windows lit mal les accents dans certains ZIP
+const safeName = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\\/:*?"<>|\r\n\t]+/g, '_').replace(/\s+/g, ' ').trim().slice(0, 60) || 'sans_nom';
+const dayOf = ts => isoLocal(new Date(ts).toISOString()).slice(0, 10);
+function photoPlan(siteId, list) { // list = photos du site ; renvoie [{ph, path, name, owner}]
+  const s = siteById(siteId), root = safeName(s.nom), sn = slug(s.nom), out = [];
+  const byOwner = new Map(); list.forEach(f => { if (!byOwner.has(f.pointId)) byOwner.set(f.pointId, []); byOwner.get(f.pointId).push(f); });
+  for (const [owner, fs] of byOwner) {
+    fs.sort((a, b) => a.ts - b.ts);
+    let dir, code, typeLib;
+    const p = points.find(x => x.id === owner), pg = polys.find(x => x.id === owner);
+    if (p) {
+      code = p.data.code || p.type;
+      typeLib = p.type === 'station' ? (isPea(p) ? 'Point d\'écoute' : 'Station') : p.type === 'arbre' ? 'Arbre' : 'Observation';
+      dir = p.type === 'station' ? (isPea(p) ? 'Points d\'ecoute' : 'Stations') : p.type === 'arbre' ? 'Arbres' : 'Observations';
+      dir += '/' + safeName(code);
+    } else if (pg) {
+      code = pg.data.code || 'P'; typeLib = 'Polygone';
+      const lib = (pg.data.commentaire || pg.data.milieu || '').slice(0, 30);
+      dir = 'Polygones/' + safeName(code + (lib ? ' - ' + lib : ''));
+    } else { code = 'Autres'; typeLib = 'Site'; dir = 'Autres'; }
+    // numéro d'ordre stable : position parmi toutes les photos de ce propriétaire (exportées ou non)
+    fs.forEach(f => {
+      const i = f._rank;
+      const name = `${sn}_${slug(code)}${f.passage ? '_P' + f.passage : ''}_${dayOf(f.ts)}_${i}.jpg`;
+      out.push({ ph: f, owner, code, typeLib, path: `${root}/${dir}/${name}`, name });
+    });
+  }
+  return out;
+}
+async function sitePhotos(siteId) {
+  const owners = [siteId, ...points.filter(p => p.siteId === siteId).map(p => p.id), ...polys.filter(p => p.siteId === siteId).map(p => p.id)];
+  const all = [];
+  for (const o of owners) { const fs = (await photosOf(o)).sort((a, b) => a.ts - b.ts); fs.forEach((f, i) => { f._rank = i + 1; all.push(f); }); }
+  return all;
+}
+async function openPhotoExport(siteId) {
+  siteId = siteId || settings.activeSiteId;
+  if (!siteId) { siteId = await pickSite('Exporter les photos : choisir le site'); if (!siteId) return; }
+  const s = siteById(siteId);
+  const all = await sitePhotos(siteId);
+  const dispo = all.filter(f => f.blob), nouv = dispo.filter(f => !f.exportedAt);
+  const size = l => (l.reduce((t, f) => t + f.blob.size, 0) / 1048576).toFixed(1);
+  const sh = openSheet(`<h2>Photos — ${esc(s.nom)}</h2>
+    <p>${all.length} photo(s) au total : <b>${dispo.length}</b> encore sur le téléphone (${size(dispo)} Mo), dont <b>${nouv.length}</b> jamais exportée(s).</p>
+    ${all.length - dispo.length ? `<p class="mut">${all.length - dispo.length} photo(s) déjà transférée(s) et supprimée(s) du téléphone.</p>` : ''}
+    <label class="f"><input type="checkbox" id="xNew" ${nouv.length && nouv.length < dispo.length ? 'checked' : ''} style="width:auto"> Seulement les photos jamais exportées</label>
+    <button class="btn pri" id="xGo"${dispo.length ? '' : ' disabled'}>Créer le ZIP</button>
+    ${dispo.length - nouv.length ? `<button class="btn" id="xPurge">Supprimer du téléphone les ${dispo.length - nouv.length} photo(s) déjà exportée(s)</button>` : ''}
+    <button class="btn" id="xNo">Fermer</button>`);
+  $('#xNo', sh).onclick = closeSheet;
+  if ($('#xPurge', sh)) $('#xPurge', sh).onclick = () => purgeExported(siteId);
+  $('#xGo', sh).onclick = async () => {
+    const sel = $('#xNew', sh).checked ? nouv : dispo;
+    if (!sel.length) { toast('Aucune photo à exporter'); return; }
+    toast('Préparation du ZIP…');
+    const plan = photoPlan(siteId, sel);
+    const zip = new JSZip();
+    plan.forEach(x => zip.file(x.path, x.ph.blob));
+    zip.file(`${safeName(s.nom)}/photos.csv`, csvOf(plan.map(x => ({ fichier: x.path.split('/').slice(1).join('/'), type: x.typeLib, code: x.code, passage: x.ph.passage ?? '', date: isoLocal(new Date(x.ph.ts).toISOString()), legende: x.ph.legende || '', lat: x.ph.lat ?? '', lon: x.ph.lon ?? '', observateur: x.ph.observateur || '' }))));
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+    const when = nowIso();
+    for (const x of plan) { x.ph.exportedAt = when; x.ph.fichier = x.path; if (!x.ph.thumb) x.ph.thumb = await makeThumb(x.ph.blob); const { _rank, ...rec } = x.ph; await dbPut('photos', rec); }
+    photoDeliver(blob, `Photos_${slug(s.nom)}_${stamp()}.zip`, plan, s);
+  };
+}
+function photoDeliver(blob, name, plan, s) {
+  const file = new File([blob], name, { type: 'application/zip' });
+  const canShare = navigator.canShare && navigator.canShare({ files: [file] });
+  const mo = (blob.size / 1048576).toFixed(1);
+  const sh = openSheet(`<h2>ZIP des photos prêt</h2><p><b>${esc(name)}</b><br><span class="mut">${plan.length} photo(s) · ${mo} Mo</span></p>
+    <button class="btn pri" id="eDl">Enregistrer dans Téléchargements</button>
+    ${canShare ? '<button class="btn" id="eShare">Partager (Bluetooth…)</button>' : ''}
+    <h3>Une fois le ZIP copié sur le PC</h3>
+    <p class="mut">Ouvrez le ZIP sur le PC pour vérifier, puis libérez la place sur le téléphone. Une miniature et le nom du fichier sont conservés.</p>
+    <button class="btn dan" id="ePurge">Supprimer ces ${plan.length} photo(s) du téléphone</button>
+    <button class="btn" id="eNo">Plus tard</button>`);
+  sheetLock = true;
+  $('#eDl', sh).onclick = () => { downloadBlob(blob, name); toast('ZIP enregistré dans Téléchargements'); };
+  if (canShare) $('#eShare', sh).onclick = async () => { try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e.name !== 'AbortError') toast('Partage impossible : ' + e.message); } };
+  $('#eNo', sh).onclick = () => { closeSheet(); toast('Photos marquées comme exportées ; vous pourrez les supprimer plus tard depuis « Photos »'); };
+  $('#ePurge', sh).onclick = async () => {
+    if (!await confirmSheet(`Avez-vous bien copié le ZIP sur le PC ? Les ${plan.length} photo(s) seront supprimées du téléphone (${mo} Mo libérés) et ne pourront plus être réexportées depuis le téléphone.`, 'Oui, supprimer du téléphone')) return photoDeliver(blob, name, plan, s);
+    for (const x of plan) { const r = await dbGet('photos', x.ph.id); if (r) { r.blob = null; await dbPut('photos', r); } }
+    toast(`${plan.length} photo(s) supprimée(s) du téléphone — ${mo} Mo libérés`, 4000);
+  };
+}
+async function purgeExported(siteId) { // supprimer plus tard les photos déjà exportées
+  const all = (await sitePhotos(siteId)).filter(f => f.blob && f.exportedAt);
+  if (!all.length) { toast('Aucune photo exportée encore présente sur le téléphone'); return; }
+  const mo = (all.reduce((t, f) => t + f.blob.size, 0) / 1048576).toFixed(1);
+  if (!await confirmSheet(`${all.length} photo(s) déjà exportée(s) sont encore sur le téléphone (${mo} Mo). Les supprimer du téléphone (miniature conservée) ?`, 'Supprimer du téléphone')) return;
+  for (const f of all) { const { _rank, ...r } = f; r.blob = null; if (!r.thumb) r.thumb = await makeThumb(f.blob); await dbPut('photos', r); }
+  toast(`${all.length} photo(s) supprimée(s) — ${mo} Mo libérés`, 4000);
 }
 
 /* ---------- Météo du jour ---------- */
@@ -739,11 +951,13 @@ async function drawZone(s, zone) {
   s[zone.toLowerCase()] = mode === 'add' ? geomOf([...polysOf(s[zone.toLowerCase()]), ...polysOf(g)]) : g;
   fixBbox(s); s.updatedAt = nowIso(); await dbPut('sites', s); drawSites(); toast(`${zone} enregistrée`);
 }
-function siteMenu(s) {
+async function siteMenu(s) {
   const n = points.filter(p => p.siteId === s.id).length + polys.filter(p => p.siteId === s.id).length;
+  const nph = (await photosOf(s.id)).length;
   const sh = openSheet(`<h2>${esc(s.nom)}</h2><p class="mut">${n} élément(s)${s.offline ? ` · fond hors ligne téléchargé le ${esc(fmtJour(s.offline.date))} (${s.offline.n} tuiles)` : ''}</p>
     <button class="btn pri" id="mAct">Voir et activer ce site</button>
     <button class="btn" id="mMet">Météo</button>
+    <div class="row"><button class="btn" id="mPh">Photos du site (${nph})</button><button class="btn" id="mPhX">Exporter les photos</button></div>
     <button class="btn" id="mOff"${hasGeom(s) ? '' : ' disabled'}>${s.offline ? 'Mettre à jour' : 'Télécharger'} le fond hors ligne</button>
     <div class="row"><button class="btn" id="mZE">${s.ze ? 'Redessiner' : 'Dessiner'} la ZE</button><button class="btn" id="mZEE">${s.zee ? 'Redessiner' : 'Dessiner'} la ZEE</button></div>
     <button class="btn" id="mExp">Exporter ce site pour QGIS</button>
@@ -752,6 +966,8 @@ function siteMenu(s) {
     <button class="btn" id="mBack">Retour</button>`);
   $('#mAct', sh).onclick = () => { closeSheet(); setActive(s.id); };
   $('#mMet', sh).onclick = () => openMeteo(s.id);
+  $('#mPh', sh).onclick = () => openSitePhotos(s);
+  $('#mPhX', sh).onclick = () => openPhotoExport(s.id);
   $('#mOff', sh).onclick = () => downloadTiles([s]);
   $('#mZE', sh).onclick = () => drawZone(s, 'ZE');
   $('#mZEE', sh).onclick = () => drawZone(s, 'ZEE');
@@ -764,14 +980,14 @@ function siteMenu(s) {
   };
   $('#mDel', sh).onclick = () => {
     const sh2 = openSheet(`<h2>Supprimer « ${esc(s.nom)} »</h2>
-      ${n ? `<p>Ce site contient <b>${n} élément(s)</b> (points, polygones). Pensez à synchroniser avant.</p><button class="btn dan" id="dAll">Supprimer le site et ses ${n} éléments</button><button class="btn" id="dPer">Supprimer seulement le site (éléments gardés « hors site »)</button>` : `<button class="btn dan" id="dPer">Supprimer</button>`}
+      ${n ? `<p>Ce site contient <b>${n} élément(s)</b> (points, polygones). Ses photos « Autres » seront supprimées. Pensez à synchroniser avant.</p><button class="btn dan" id="dAll">Supprimer le site et ses ${n} éléments</button><button class="btn" id="dPer">Supprimer seulement le site (éléments gardés « hors site »)</button>` : `<button class="btn dan" id="dPer">Supprimer</button>`}
       <button class="btn" id="dNo">Annuler</button>`);
     const del = async withAll => {
       for (const p of points.filter(p => p.siteId === s.id)) { if (withAll) await deletePoint(p); else { p.siteId = null; p.updatedAt = nowIso(); await dbPut('points', p); } }
       for (const pg of polys.filter(p => p.siteId === s.id)) {
-        if (withAll) { await dbDel('polys', pg.id); await tombstone('poly', pg.id); } else { pg.siteId = null; pg.updatedAt = nowIso(); await dbPut('polys', pg); }
+        if (withAll) await deletePoly(pg); else { pg.siteId = null; pg.updatedAt = nowIso(); await dbPut('polys', pg); }
       }
-      if (withAll) polys = polys.filter(p => p.siteId !== s.id);
+      await deleteOwnerPhotos(s.id);
       await dbDel('sites', s.id); await tombstone('site', s.id); sites = sites.filter(x => x.id !== s.id);
       if (settings.activeSiteId === s.id) settings.activeSiteId = null;
       saveSettings(); drawAll(); openSites();
@@ -941,9 +1157,10 @@ async function downloadTiles(list) {
 /* ---------- Export QGIS ---------- */
 const flat = v => Array.isArray(v) ? v.join(', ') : v ?? '';
 const r2 = v => Math.round(v * 100) / 100;
-async function photoNames(p) {
-  const s = siteById(p.siteId), ph = await photosOf(p.id);
-  return ph.map((f, i) => ({ f, name: `${slug(s ? s.nom : 'hors_site')}_${slug(p.data.code || p.type)}_${i + 1}.jpg` }));
+async function photoNameMap(siteIds) { // id photo → nom du fichier (identique à l'export des photos)
+  const m = new Map();
+  for (const sid of siteIds) for (const x of photoPlan(sid, await sitePhotos(sid))) m.set(x.ph.id, x.name);
+  return m;
 }
 function baseProps(p) {
   const s = siteById(p.siteId);
@@ -969,22 +1186,23 @@ async function exportQgis(siteIds) {
   if (!pts.length && !pgs.length && !mts.length) { toast('Rien à exporter'); return; }
   toast('Préparation de l\'export…');
   const zip = new JSZip();
+  const names = await photoNameMap(siteIds || sites.map(x => x.id));
+  const phNames = async id => (await photosOf(id)).sort((a, b) => a.ts - b.ts).map(f => names.get(f.id) || f.id + '.jpg');
   for (const [type, T] of Object.entries(TYPES)) {
     const list = pts.filter(p => p.type === type); if (!list.length) continue;
     const feats = [], rows = [], pfeats = [], prows = [];
     for (const p of list) {
-      const ph = await photoNames(p);
-      ph.forEach(({ f, name }) => zip.file('photos/' + name, f.blob));
+      const ph = await phNames(p.id);
       const pr = { ...baseProps(p), ...dataProps(FORMS[type], p.data) };
       if (type === 'station') {
         const lp = lastPassage(p) || {};
         Object.assign(pr, { nb_passages: p.passages.length, dernier_passage: lp.n ?? '', detecteur: lp.detecteur || '', derniere_pose: fmtDate(lp.date_pose), derniere_releve: fmtDate(lp.date_releve), en_place: isPending(p) ? 'oui' : 'non' });
         for (const a of p.passages) {
-          const ar = { site: pr.site, annee: pr.annee, zone: pr.zone, code: p.data.code, milieu: p.data.milieu || '', passage: a.n, detecteur: a.detecteur || '', date_pose: fmtDate(a.date_pose), date_releve: fmtDate(a.date_releve), nb_nuits: a.nb_nuits ?? '', remarque_passage: a.remarque || '', ...posProps(p), station_id: p.id, passage_id: a.id };
+          const ar = { site: pr.site, annee: pr.annee, zone: pr.zone, type_station: p.data.type_station || 'PEP', code: p.data.code, milieu: p.data.milieu || '', passage: a.n, detecteur: a.detecteur || '', date_pose: fmtDate(a.date_pose), date_releve: fmtDate(a.date_releve), nb_nuits: a.nb_nuits ?? '', remarque_passage: a.remarque || '', ...posProps(p), station_id: p.id, passage_id: a.id };
           prows.push(ar); pfeats.push({ type: 'Feature', properties: ar, geometry: ptGeom(p) });
         }
       }
-      Object.assign(pr, posProps(p), { photos: ph.map(x => x.name).join(' | '), id: p.id });
+      Object.assign(pr, posProps(p), { photos: ph.join(' | '), id: p.id });
       rows.push(pr); feats.push({ type: 'Feature', properties: pr, geometry: ptGeom(p) });
     }
     zip.file(`${T.fichier}.geojson`, fc(T.fichier, feats));
@@ -992,9 +1210,10 @@ async function exportQgis(siteIds) {
     if (pfeats.length) { zip.file('stations_passages.geojson', fc('stations_passages', pfeats)); zip.file('stations_passages_L93.csv', csvOf(prows)); }
   }
   if (pgs.length) {
+    const pgNames = new Map(); for (const pg of pgs) pgNames.set(pg.id, (await phNames(pg.id)).join(' | '));
     zip.file('polygones.geojson', fc('polygones', pgs.map(pg => {
       const s = siteById(pg.siteId);
-      return { type: 'Feature', properties: { site: s ? s.nom : '', commentaire: pg.data.commentaire || '', milieu: pg.data.milieu || '', surface_m2: Math.round(areaM2(pg.geom)), observateur: pg.observateur || '', saisi_le: isoLocal(pg.createdAt), id: pg.id }, geometry: pg.geom };
+      return { type: 'Feature', properties: { site: s ? s.nom : '', code: pg.data.code || '', photos: pgNames.get(pg.id), commentaire: pg.data.commentaire || '', milieu: pg.data.milieu || '', surface_m2: Math.round(areaM2(pg.geom)), observateur: pg.observateur || '', saisi_le: isoLocal(pg.createdAt), id: pg.id }, geometry: pg.geom };
     })));
   }
   if (mts.length) zip.file('meteo.csv', csvOf(mts.sort((a, b) => a.date.localeCompare(b.date)).map(m => ({ site: (siteById(m.siteId) || {}).nom || '', date: m.date, temp_coucher_c: m.temp_coucher, vent: m.vent || '', pluie: m.pluie || '', remarque: m.remarque || '', observateur: m.observateur || '' }))));
@@ -1003,7 +1222,8 @@ async function exportQgis(siteIds) {
     `stations.geojson : 1 point par station (résumé du dernier passage). stations_passages : 1 ligne par passage.\r\n` +
     `polygones.geojson : polygones commentés (surface en m²). meteo.csv : météo par site et par jour.\r\n` +
     `*_L93.csv : séparateur « ; ». Dans QGIS : Couche > Ajouter une couche de texte délimité, X = x_l93, Y = y_l93, SCR = EPSG:2154.\r\n` +
-    `zone : ZE, ZEE, hors zone ou hors site. photos/ : photos nommées site_code_n.jpg.\r\n`);
+    `stations : type_station PEP (écoute passive) ou PEA (point d'écoute active).\r\n` +
+    `zone : ZE, ZEE, hors zone ou hors site. Attribut « photos » : noms des fichiers dans l'export photos du site (menu Photos).\r\n`);
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
   deliver(blob, `${APP}_QGIS_${scopeName(siteIds)}_${stamp()}.zip`, 'application/zip');
 }
@@ -1013,49 +1233,68 @@ const siteOut = s => ({ id: s.id, nom: s.nom, annee: s.annee || '', ze: s.ze || 
 function pointOut(p) {
   const [x, y] = toL93(p.lon, p.lat);
   const o = { id: p.id, type: p.type, siteId: p.siteId, lat: p.lat, lon: p.lon, x_l93: r2(x), y_l93: r2(y), precision_m: p.acc ?? null, source_pos: p.source || '', ...p.data, photoIds: p.photoIds || [], observateur: p.observateur || '', createdAt: p.createdAt, updatedAt: p.updatedAt };
-  if (p.type === 'station') o.passages = p.passages;
+  if (p.type === 'station') { o.passages = p.passages; o.passagesSupprimes = p.passagesSupprimes || []; }
   return o;
 }
-const DATA_KEYS = { station: FORMS.station.map(f => f.k), arbre: FORMS.arbre.map(f => f.k), obs: FORMS.obs.map(f => f.k) };
+const DATA_KEYS = { station: FORMS.station.map(f => f.k), arbre: FORMS.arbre.map(f => f.k), obs: FORMS.obs.map(f => f.k), poly: FORMS.poly.map(f => f.k) };
 function pointIn(o, type) {
   const data = {}; for (const k of DATA_KEYS[type]) if (o[k] !== undefined) data[k] = o[k];
   const p = { id: o.id, type, siteId: o.siteId || null, lat: +o.lat, lon: +o.lon, acc: o.precision_m ?? null, source: o.source_pos || '', data, photoIds: o.photoIds || [], observateur: o.observateur || '', createdAt: o.createdAt, updatedAt: o.updatedAt };
-  if (type === 'station') p.passages = o.passages || [];
+  if (type === 'station') { p.passages = o.passages || []; p.passagesSupprimes = o.passagesSupprimes || []; if (!p.data.type_station) p.data.type_station = 'PEP'; }
   return p;
+}
+const polyOut = pg => ({ id: pg.id, siteId: pg.siteId, geom: pg.geom, ...pg.data, surface_m2: Math.round(areaM2(pg.geom)), photoIds: pg.photoIds || [], observateur: pg.observateur || '', createdAt: pg.createdAt, updatedAt: pg.updatedAt });
+function polyIn(o) { const data = {}; for (const k of DATA_KEYS.poly) data[k] = o[k] ?? ''; return { id: o.id, siteId: o.siteId || null, geom: o.geom, data, photoIds: o.photoIds || [], observateur: o.observateur || '', createdAt: o.createdAt, updatedAt: o.updatedAt }; }
+// Fusion d'une station : champs de la version la plus récente, passages fusionnés un par un
+const pTime = a => String(a.updatedAt || a.createdAt || '');
+function mergeStation(cur, inc) {
+  const base = String(inc.updatedAt || '') > String(cur.updatedAt || '') ? inc : cur;
+  const tomb = new Map();
+  [...(cur.passagesSupprimes || []), ...(inc.passagesSupprimes || [])].forEach(t => { const o = tomb.get(t.id); if (!o || t.deletedAt > o.deletedAt) tomb.set(t.id, t); });
+  const pass = new Map();
+  [...(cur.passages || []), ...(inc.passages || [])].forEach(a => { const o = pass.get(a.id); if (!o || pTime(a) > pTime(o)) pass.set(a.id, a); });
+  const passages = [...pass.values()].filter(a => { const t = tomb.get(a.id); return !t || t.deletedAt < pTime(a); }).sort((a, b) => (+a.n || 0) - (+b.n || 0));
+  const upd = [cur.updatedAt, inc.updatedAt].map(String).sort().pop();
+  return { ...base, passages, passagesSupprimes: [...tomb.values()], photoIds: [...new Set([...(cur.photoIds || []), ...(inc.photoIds || [])])], updatedAt: upd };
 }
 async function exportSync(withPhotos) {
   toast('Préparation du paquet…');
   if (!settings.deviceId) { settings.deviceId = uuid(); saveSettings(); }
   const del = await dbAll('deleted');
-  const photos = withPhotos ? await dbAll('photos') : [];
+  const photos = await dbAll('photos');
+  const zip = new JSZip(); let nFull = 0;
+  const phMeta = photos.map(p => {
+    const m = { id: p.id, pointId: p.pointId, kind: p.kind || 'point', passage: p.passage ?? null, legende: p.legende || '', ts: p.ts, lat: p.lat ?? null, lon: p.lon ?? null, observateur: p.observateur || '', exportedAt: p.exportedAt || null, chemin_export: p.fichier || '' };
+    if (p.thumb) { m.miniature = `photos/mini/${p.id}.jpg`; zip.file(m.miniature, p.thumb); }
+    if (withPhotos && p.blob) { m.fichier = `photos/${p.id}.jpg`; zip.file(m.fichier, p.blob); nFull++; }
+    return m;
+  });
   const data = {
-    format: 'chirosync', version: 1, appli: `${APP} ${VERSION}`, appareil: settings.deviceId, observateur: settings.observateur, exporte_le: nowIso(), systeme: 'WGS84 (EPSG:4326), x_l93/y_l93 en Lambert-93 (EPSG:2154)',
+    format: 'chirosync', version: 2, appli: `${APP} ${VERSION}`, appareil: settings.deviceId, observateur: settings.observateur, exporte_le: nowIso(), systeme: 'WGS84 (EPSG:4326), x_l93/y_l93 en Lambert-93 (EPSG:2154)',
     sites: sites.map(siteOut),
     stations: points.filter(p => p.type === 'station').map(pointOut),
     arbres: points.filter(p => p.type === 'arbre').map(pointOut),
     observations: points.filter(p => p.type === 'obs').map(pointOut),
-    polygones: polys.map(pg => ({ id: pg.id, siteId: pg.siteId, geom: pg.geom, ...pg.data, surface_m2: Math.round(areaM2(pg.geom)), observateur: pg.observateur || '', createdAt: pg.createdAt, updatedAt: pg.updatedAt })),
+    polygones: polys.map(polyOut),
     meteo: meteos.map(m => ({ ...m })),
     suppressions: del.map(d => ({ id: d.id, type: d.kind, deletedAt: d.deletedAt })),
-    photos: photos.map(p => ({ id: p.id, pointId: p.pointId, fichier: `photos/${p.id}.jpg` })),
+    photos: phMeta,
   };
-  const zip = new JSZip();
   zip.file('donnees.json', JSON.stringify(data, null, 1));
-  photos.forEach(p => zip.file(`photos/${p.id}.jpg`, p.blob));
   const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
-  settings.lastSync = { envoi: nowIso() }; saveSettings();
+  settings.lastSync = { ...(settings.lastSync || {}), envoi: nowIso() }; saveSettings();
   deliver(blob, `${APP}_${slug(settings.observateur || 'appareil')}_${stamp()}.chirosync.zip`, 'application/zip',
-    `${sites.length} site(s), ${points.length} point(s), ${polys.length} polygone(s), ${meteos.length} météo(s)${withPhotos ? `, ${photos.length} photo(s)` : ''}. À déposer dans ChiroThèque (Bluetooth ou câble USB : dossier Téléchargements).`);
+    `${sites.length} site(s), ${points.length} point(s), ${polys.length} polygone(s), ${meteos.length} météo(s), ${photos.length} photo(s) (${withPhotos ? `${nFull} en taille réelle` : 'miniatures seulement'}). À déposer dans ChiroThèque (Bluetooth ou câble USB : dossier Téléchargements).`);
 }
 function syncMenu() {
   const sh = openSheet(`<h2>Synchronisation ChiroThèque</h2>
     <p class="mut">Échange par fichier : le téléphone dépose ses données, et récupère celles de ChiroThèque (sites et périmètres, données des collègues).</p>
     <h3>1. Envoyer</h3>
-    <label class="f"><input type="checkbox" id="yPh" checked style="width:auto"> Inclure les photos</label>
+    <label class="f"><input type="checkbox" id="yPh" style="width:auto"> Inclure les photos en taille réelle (sinon : miniatures seulement — les photos passent par « Exporter les photos »)</label>
     <button class="btn pri" id="ySend">Préparer le paquet à envoyer</button>
     <h3>2. Recevoir</h3>
-    <button class="btn" id="yRecv">Importer un paquet ChiroThèque (.chirosync.zip)</button>
-    <p class="mut">Le même paquet sert de sauvegarde complète, et à transférer les données vers un autre téléphone.</p>
+    <button class="btn" id="yRecv">Importer un paquet (.chirosync.zip)</button>
+    <p class="mut">Le paquet avec photos en taille réelle sert de sauvegarde complète, et à transférer les données vers un autre téléphone.</p>
     <button class="btn" id="yNo">Fermer</button>`);
   $('#ySend', sh).onclick = () => exportSync($('#yPh', sh).checked);
   $('#yRecv', sh).onclick = () => pickFile('.zip,.json,application/zip,application/json', importSync);
@@ -1063,21 +1302,24 @@ function syncMenu() {
 }
 async function importSync(file) {
   try {
-    let data; const photoBlobs = new Map();
+    let data; const photoBlobs = new Map(), thumbBlobs = new Map();
     if (/\.json$/i.test(file.name)) data = JSON.parse(await file.text());
     else {
       const zip = await JSZip.loadAsync(file);
       const main = zip.file('donnees.json'); if (!main) throw new Error('donnees.json absent du paquet');
       data = JSON.parse(await main.async('string'));
-      for (const p of data.photos || []) { const f = zip.file(p.fichier); if (f) photoBlobs.set(p.id, await f.async('blob')); }
+      for (const p of data.photos || []) {
+        const f = p.fichier && zip.file(p.fichier); if (f) photoBlobs.set(p.id, await f.async('blob'));
+        const m = p.miniature && zip.file(p.miniature); if (m) thumbBlobs.set(p.id, await m.async('blob'));
+      }
     }
-    await importSyncData(data, photoBlobs);
+    await importSyncData(data, photoBlobs, thumbBlobs);
   } catch (e) { toast('Import impossible : ' + e.message, 6000); }
 }
-async function importSyncData(data, photoBlobs) {
+async function importSyncData(data, photoBlobs, thumbBlobs = new Map()) {
   if (data.format === 'chiroterrain-sauvegarde') { // sauvegarde de la v1.0
     for (const p of data.photos || []) photoBlobs.set(p.id, await (await fetch(p.data)).blob());
-    data = { format: 'chirosync', sites: data.sites, stations: [], arbres: [], observations: [], polygones: [], meteo: [], suppressions: [], photos: (data.photos || []).map(p => ({ id: p.id, pointId: p.pointId })), _v1points: data.points };
+    data = { format: 'chirosync', sites: data.sites, stations: [], arbres: [], observations: [], polygones: [], meteo: [], suppressions: [], photos: (data.photos || []).map(p => ({ id: p.id, pointId: p.pointId, ts: p.ts, fichier: 'x' })), _v1points: data.points };
   }
   if (data.format !== 'chirosync') throw new Error('format de paquet inconnu');
   const n = { new: 0, upd: 0, del: 0, ph: 0 };
@@ -1087,29 +1329,25 @@ async function importSyncData(data, photoBlobs) {
   // Sites
   for (const o of data.sites || []) {
     if (isDeadLocally(o)) continue;
-    let cur = await dbGet('sites', o.id);
+    const cur = await dbGet('sites', o.id);
     if (o.geom && !o.ze) { o.ze = o.geom; delete o.geom; }
     if (newer(o, cur)) { const s = fixBbox({ ...siteOut(o), offline: cur ? cur.offline : null }); await dbPut('sites', s); cur ? n.upd++ : n.new++; }
   }
-  // Points
-  const incoming = [...(data.stations || []).map(o => pointIn(o, 'station')), ...(data.arbres || []).map(o => pointIn(o, 'arbre')), ...(data.observations || []).map(o => pointIn(o, 'obs')), ...(data._v1points || []).map(p => ({ ...migratePoint(p), photoIds: (data.photos || []).filter(f => f.pointId === p.id).map(f => f.id) }))];
+  // Points (stations : fusion passage par passage)
+  const incoming = [...(data.stations || []).map(o => pointIn(o, 'station')), ...(data.arbres || []).map(o => pointIn(o, 'arbre')), ...(data.observations || []).map(o => pointIn(o, 'obs')),
+    ...(data._v1points || []).map(p => ({ ...migratePoint(p), photoIds: (data.photos || []).filter(f => f.pointId === p.id).map(f => f.id) }))];
   for (const p of incoming) {
     if (isDeadLocally(p)) continue;
     const cur = await dbGet('points', p.id);
-    if (newer(p, cur)) {
-      await dbPut('points', p); cur ? n.upd++ : n.new++;
-      if (cur) for (const f of await photosOf(p.id)) if (!p.photoIds.includes(f.id) && !photoBlobs.has(f.id)) await dbDel('photos', f.id);
-    }
-  }
-  for (const ph of data.photos || []) {
-    const b = photoBlobs.get(ph.id); if (!b || await dbGet('photos', ph.id)) continue;
-    await dbPut('photos', { id: ph.id, pointId: ph.pointId, blob: b, ts: Date.now() }); n.ph++;
+    if (!cur) { await dbPut('points', p); n.new++; continue; }
+    const res = p.type === 'station' ? mergeStation(cur, p) : (newer(p, cur) ? { ...p, photoIds: [...new Set([...(cur.photoIds || []), ...(p.photoIds || [])])] } : null);
+    if (res && JSON.stringify(res) !== JSON.stringify(cur)) { await dbPut('points', res); n.upd++; }
   }
   // Polygones
   for (const o of data.polygones || []) {
     if (isDeadLocally(o)) continue;
     const cur = await dbGet('polys', o.id);
-    if (newer(o, cur)) { await dbPut('polys', { id: o.id, siteId: o.siteId || null, geom: o.geom, data: { commentaire: o.commentaire || '', milieu: o.milieu || '' }, observateur: o.observateur || '', createdAt: o.createdAt, updatedAt: o.updatedAt }); cur ? n.upd++ : n.new++; }
+    if (newer(o, cur)) { await dbPut('polys', polyIn(o)); cur ? n.upd++ : n.new++; }
   }
   // Météo
   for (const o of data.meteo || []) {
@@ -1117,13 +1355,31 @@ async function importSyncData(data, photoBlobs) {
     const cur = await dbGet('meteo', o.id);
     if (newer(o, cur)) { await dbPut('meteo', o); cur ? n.upd++ : n.new++; }
   }
+  // Photos (une photo déjà supprimée du téléphone après export n'est jamais re-téléchargée)
+  for (const m of data.photos || []) {
+    if (deleted.has(m.id)) continue;
+    const cur = await dbGet('photos', m.id), blob = photoBlobs.get(m.id) || null, thumb = thumbBlobs.get(m.id) || null;
+    if (!cur) {
+      if (!blob && !thumb) continue;
+      await dbPut('photos', { id: m.id, pointId: m.pointId, kind: m.kind || 'point', passage: m.passage ?? null, legende: m.legende || '', ts: m.ts || Date.now(), lat: m.lat ?? null, lon: m.lon ?? null,
+        observateur: m.observateur || '', exportedAt: m.exportedAt || null, fichier: m.chemin_export || '', blob, thumb: thumb || (blob ? await makeThumb(blob) : null) });
+      n.ph++;
+    } else {
+      let ch = false;
+      if (!cur.exportedAt && m.exportedAt) { cur.exportedAt = m.exportedAt; cur.fichier = m.chemin_export || cur.fichier; ch = true; }
+      if (!cur.legende && m.legende) { cur.legende = m.legende; ch = true; }
+      if (!cur.thumb && thumb) { cur.thumb = thumb; ch = true; }
+      if (!cur.blob && !cur.exportedAt && blob) { cur.blob = blob; ch = true; }
+      if (ch) await dbPut('photos', cur);
+    }
+  }
   // Suppressions faites ailleurs
-  const STORE = { site: 'sites', point: 'points', poly: 'polys', meteo: 'meteo' };
+  const STORE = { site: 'sites', point: 'points', poly: 'polys', meteo: 'meteo', photo: 'photos' };
   for (const d of data.suppressions || []) {
     const st = STORE[d.type]; if (!st) continue;
     const cur = await dbGet(st, d.id);
-    if (cur && String(d.deletedAt) >= String(cur.updatedAt || '')) {
-      if (st === 'points') for (const f of await photosOf(d.id)) await dbDel('photos', f.id);
+    if (cur && (st === 'photos' || String(d.deletedAt) >= String(cur.updatedAt || ''))) {
+      if (st === 'points' || st === 'polys' || st === 'sites') for (const f of await photosOf(d.id)) await dbDel('photos', f.id);
       await dbDel(st, d.id); n.del++;
     }
     if (!deleted.has(d.id)) await dbPut('deleted', { id: d.id, kind: d.type, deletedAt: d.deletedAt });
@@ -1171,6 +1427,7 @@ $('#btnMenu').onclick = () => {
     <button class="btn" id="mPend">Stations à relever</button>
     <button class="btn" id="mMet">Météo du jour</button>
     <h3>Échanges</h3>
+    <button class="btn" id="mPhX">Exporter les photos d'un site</button>
     <button class="btn pri" id="mSync">Synchroniser avec ChiroThèque</button>
     ${s ? `<button class="btn" id="mExpS">Exporter « ${esc(s.nom)} » pour QGIS</button>` : ''}
     <button class="btn" id="mExpA">Exporter tous les sites pour QGIS</button>
@@ -1179,7 +1436,7 @@ $('#btnMenu').onclick = () => {
     <button class="btn" id="mSet">Réglages</button>
     <button class="btn" id="mClose">Fermer</button>
     <p class="mut" style="text-align:center">Version ${VERSION} — données stockées sur ce téléphone${settings.lastSync && settings.lastSync.envoi ? `<br>Dernier envoi : ${esc(isoLocal(settings.lastSync.envoi))}` : ''}</p>`);
-  $('#mSites', sh).onclick = openSites; $('#mPend', sh).onclick = openPending; $('#mMet', sh).onclick = () => openMeteo();
+  $('#mSites', sh).onclick = openSites; $('#mPhX', sh).onclick = () => openPhotoExport(s ? s.id : null); $('#mPend', sh).onclick = openPending; $('#mMet', sh).onclick = () => openMeteo();
   $('#mSync', sh).onclick = syncMenu; $('#mImp', sh).onclick = pickImport;
   if (s) $('#mExpS', sh).onclick = () => exportQgis([s.id]);
   $('#mExpA', sh).onclick = () => exportQgis(null);
@@ -1189,6 +1446,8 @@ async function openSettings() {
   let usage = '';
   try { const e = await navigator.storage.estimate(); usage = `${(e.usage / 1048576).toFixed(0)} Mo utilisés`; } catch (e) { }
   const persisted = navigator.storage && navigator.storage.persisted ? await navigator.storage.persisted() : false;
+  const allPh = await dbAll('photos'), onPh = allPh.filter(f => f.blob);
+  usage += ` · ${onPh.length} photo(s) sur le téléphone (${(onPh.reduce((t, f) => t + f.blob.size, 0) / 1048576).toFixed(0)} Mo), ${allPh.length - onPh.length} transférée(s)`;
   const sh = openSheet(`<h2>Réglages</h2>
     <label class="f">Observateur (initiales ou nom)</label><input id="sObs" value="${esc(settings.observateur)}">
     <label class="f">Détecteurs (un par ligne)</label><textarea id="sDet" rows="6">${esc(settings.detecteurs.join('\n'))}</textarea>
@@ -1230,10 +1489,14 @@ async function askPersist() { if (persistAsked || !navigator.storage || !navigat
 
 /* ---------- Migration des données de la v1.0 ---------- */
 function migratePoint(p) {
+  if (p.type === 'station' && p.passages) {
+    if (!p.data.type_station) p.data.type_station = 'PEP';
+    p.passages.forEach(a => { if (!a.updatedAt) a.updatedAt = a.createdAt || p.updatedAt; });
+  }
   if (p.type === 'station' && !p.passages) {
     const d = p.data || {};
     p.passages = (d.date_pose || d.detecteur) ? [{ id: uuid(), n: 1, detecteur: d.detecteur || '', date_pose: d.date_pose || '', date_releve: d.date_releve || '', nb_nuits: d.nb_nuits ?? '', remarque: '', createdAt: p.createdAt }] : [];
-    p.data = { code: d.code || '', milieu: d.milieu || '', remarque: d.remarque || '' };
+    p.data = { type_station: 'PEP', code: d.code || '', milieu: d.milieu || '', remarque: d.remarque || '' };
   }
   if (p.type === 'arbre' && typeof p.data.diametre === 'number') {
     const v = p.data.diametre; p.data.diametre = v < 20 ? 'PBC' : v < 40 ? 'MBC' : v < 60 ? 'GBC' : 'TGBC';
@@ -1241,6 +1504,9 @@ function migratePoint(p) {
   return p;
 }
 async function migrate() {
+  for (const ph of await dbAll('photos')) if (!ph.kind || !('exportedAt' in ph)) { ph.kind = ph.kind || 'point'; if (!('exportedAt' in ph)) { ph.exportedAt = null; ph.fichier = ''; ph.legende = ''; ph.passage = ph.passage ?? null; } if (!ph.thumb && ph.blob) ph.thumb = await makeThumb(ph.blob); await dbPut('photos', ph); }
+  const pgs = await dbAll('polys'); polys = pgs; // pour nextCode
+  for (const pg of pgs) if (!pg.data.code) { pg.data.code = nextCode('poly', pg.siteId); pg.updatedAt = nowIso(); await dbPut('polys', pg); }
   for (const s of await dbAll('sites')) if (s.geom && !('ze' in s)) { s.ze = s.geom; s.zee = null; delete s.geom; s.updatedAt = s.updatedAt || s.createdAt; fixBbox(s); await dbPut('sites', s); }
   for (const p of await dbAll('points')) {
     const before = JSON.stringify(p); migratePoint(p);

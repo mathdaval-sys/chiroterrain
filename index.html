@@ -27,7 +27,7 @@ body{display:flex;flex-direction:column}
 #bottom button{flex:1;min-width:0;border:0;border-radius:12px;color:#fff;font-size:14px;font-weight:700;padding:13px 2px;line-height:1.15}
 #bottom button span{display:block;font-size:11px;font-weight:500;opacity:.9}
 .b-st{background:var(--st)}.b-pg{background:var(--pg)}.b-ar{background:var(--ar)}.b-ob{background:var(--ob)}
-#fab{position:absolute;right:10px;bottom:90px;z-index:900;display:flex;flex-direction:column;gap:8px}
+#fab{position:absolute;right:10px;bottom:84px;z-index:900;display:flex;flex-direction:column;gap:8px}
 #fab button{width:50px;height:50px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.35);font-size:11px;font-weight:700;color:#163026}
 #fab button.on{background:var(--st);color:#fff}
 /* Marqueurs */
@@ -92,6 +92,10 @@ textarea{min-height:70px}
 #updBar button{margin-left:8px}
 #photoView{position:fixed;inset:0;background:#000;z-index:4000;display:none;align-items:center;justify-content:center}
 #photoView img{max-width:100%;max-height:100%}
+#photoNote{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);color:#fff;padding:12px;font-size:14px;display:none}
+#photoView{flex-direction:column}
+.thumbs .exp{position:absolute;left:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;padding:1px 4px;border-radius:3px}
+.mk-pea{background:#0f8f8f;border-radius:4px 14px 4px 14px}
 .leaflet-control-layers-toggle{width:44px;height:44px}
 </style>
 </head>
@@ -107,6 +111,7 @@ textarea{min-height:70px}
   <button id="btnFollow" title="Suivre ma position">GPS</button>
   <button id="btnFit" title="Voir le site actif">SITE</button>
   <button id="btnMeteo" title="Météo du jour">MÉTÉO</button>
+  <button id="btnPhoto" title="Photo du site">PHOTO</button>
 </div>
 <div id="cross"></div>
 <div id="crossBar"></div>
@@ -119,7 +124,7 @@ textarea{min-height:70px}
 <div id="backdrop"></div>
 <div id="sheet"></div>
 <div id="toast"></div>
-<div id="photoView"><img alt=""></div>
+<div id="photoView"><img alt=""><div id="photoNote"></div></div>
 <script src="lib/leaflet.js"></script>
 <script src="lib/proj4.js"></script>
 <script src="lib/jszip.min.js"></script>
